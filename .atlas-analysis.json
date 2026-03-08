@@ -1,0 +1,146 @@
+{
+  "projectType": "infrastructure",
+  "projectName": "Agentic Wallet",
+  "projectDescription": "Autonomous wallet infrastructure for AI agents on Solana, providing custody, policy enforcement, and multi-protocol transaction execution.",
+  "theme": "aspen",
+  "primaryColor": "#9945FF",
+  "lightColor": "#14F195",
+  "darkColor": "#9945FF",
+  "navigation": {
+    "tabs": [
+      {
+        "tab": "Documentation",
+        "groups": [
+          {
+            "group": "Getting Started",
+            "pages": [
+              "introduction",
+              "quickstart",
+              "installation",
+              "configuration"
+            ]
+          },
+          {
+            "group": "Architecture",
+            "pages": [
+              "architecture/overview",
+              "architecture/services",
+              "architecture/execution-flow",
+              "architecture/trust-boundaries"
+            ]
+          },
+          {
+            "group": "Core Concepts",
+            "pages": [
+              "concepts/wallets",
+              "concepts/agents",
+              "concepts/intents",
+              "concepts/policies",
+              "concepts/protocols"
+            ]
+          },
+          {
+            "group": "Operations",
+            "pages": [
+              "operations/deployment",
+              "operations/monitoring",
+              "operations/reliability",
+              "operations/troubleshooting"
+            ]
+          },
+          {
+            "group": "Security",
+            "pages": [
+              "security/overview",
+              "security/key-management",
+              "security/policy-enforcement",
+              "security/signer-backends"
+            ]
+          },
+          {
+            "group": "Integration",
+            "pages": [
+              "integration/cli",
+              "integration/sdk",
+              "integration/mcp",
+              "integration/skills"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "API Reference",
+        "groups": [
+          {
+            "group": "Overview",
+            "pages": [
+              "api/overview",
+              "api/authentication",
+              "api/response-format",
+              "api/errors"
+            ]
+          },
+          {
+            "group": "Endpoints",
+            "pages": [
+              "api/wallets",
+              "api/transactions",
+              "api/policies",
+              "api/agents",
+              "api/protocols",
+              "api/risk",
+              "api/treasury",
+              "api/audit"
+            ]
+          }
+        ]
+      },
+      {
+        "tab": "Guides",
+        "groups": [
+          {
+            "group": "Usage Guides",
+            "pages": [
+              "guides/creating-wallets",
+              "guides/executing-transactions",
+              "guides/setting-policies",
+              "guides/managing-agents",
+              "guides/protocol-interactions"
+            ]
+          },
+          {
+            "group": "Advanced",
+            "pages": [
+              "guides/escrow-program",
+              "guides/multi-agent-orchestration",
+              "guides/gasless-transactions",
+              "guides/strategy-backtesting"
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "keyFeatures": [
+    "Programmatic wallet creation and key custody",
+    "Automatic transaction signing with policy enforcement",
+    "Multi-protocol support (Jupiter, Marinade, Solend, Metaplex, Orca, Raydium, Escrow)",
+    "AI agent runtime with autonomous and supervised modes",
+    "Comprehensive security model with multiple signer backends (encrypted-file, KMS, HSM, MPC)",
+    "Durable transaction execution with RPC failover and retry logic",
+    "Audit trails and execution proofs",
+    "MCP-compatible tools for agent integration"
+  ],
+  "publicApiSurface": [
+    "POST /api/v1/wallets",
+    "POST /api/v1/transactions",
+    "POST /api/v1/policies",
+    "POST /api/v1/agents",
+    "POST /api/v1/agents/:agentId/execute",
+    "GET /api/v1/protocols",
+    "POST /api/v1/defi/swap",
+    "POST /api/v1/escrow/create",
+    "POST /api/v1/treasury/allocate",
+    "POST /mcp/call"
+  ]
+}
