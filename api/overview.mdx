@@ -1,0 +1,170 @@
+---
+title: 'API Overview'
+description: 'Introduction to the Agentic Wallet API'
+icon: 'book-open'
+---
+
+## Base URL
+
+The API gateway is accessible at:
+
+```
+http://localhost:3000
+```
+
+For production deployments, configure your base URL accordingly.
+
+## API Versioning
+
+All API endpoints are versioned and prefixed with `/api/v1`.
+
+Example:
+```
+http://localhost:3000/api/v1/wallets
+```
+
+## Required Headers
+
+All API requests require authentication headers:
+
+<ParamField header="x-api-key" type="string" required>
+  Your API key for authentication. Configured via `API_GATEWAY_API_KEYS` environment variable.
+</ParamField>
+
+<ParamField header="x-tenant-id" type="string">
+  Optional tenant identifier for multi-tenant deployments. Use `*` for wildcard access.
+</ParamField>
+
+## Common Headers
+
+```bash
+curl -H "x-api-key: dev-api-key" \
+     -H "Content-Type: application/json" \
+     http://localhost:3000/api/v1/wallets
+```
+
+## Response Envelope
+
+All API responses follow a standardized envelope structure for consistent error handling:
+
+```json
+{
+  "status": "success",
+  "stage": "completed",
+  "traceId": "123e4567-e89b-12d3-a456-426614174000",
+  "data": {
+    // Response payload
+  }
+}
+```
+
+See [Response Format](/api/response-format) for detailed specifications.
+
+## HTTP Methods
+
+The API uses standard HTTP methods:
+
+- **GET** - Retrieve resources
+- **POST** - Create resources or execute actions
+- **PUT** - Update existing resources
+- **DELETE** - Remove resources (limited use)
+
+## Rate Limiting
+
+API requests are rate-limited per API key:
+
+- Default: 120 requests per minute
+- Configure via: `API_GATEWAY_RATE_LIMIT_PER_MINUTE`
+- Rate limit headers included in responses:
+  - `X-RateLimit-Limit`
+  - `X-RateLimit-Remaining`
+  - `X-RateLimit-Reset`
+
+## Pagination
+
+List endpoints support pagination via query parameters:
+
+<ParamField query="limit" type="number" default="50">
+  Maximum number of items to return (max: 100)
+</ParamField>
+
+<ParamField query="offset" type="number" default="0">
+  Number of items to skip
+</ParamField>
+
+Example:
+```bash
+curl -H "x-api-key: dev-api-key" \
+     "http://localhost:3000/api/v1/wallets?limit=20&offset=40"
+```
+
+## Idempotency
+
+Transaction creation supports idempotency keys to prevent duplicate operations:
+
+```json
+{
+  "walletId": "uuid",
+  "type": "transfer_sol",
+  "protocol": "system-program",
+  "idempotencyKey": "unique-operation-id-12345",
+  "intent": {
+    "destination": "...",
+    "lamports": 1000000
+  }
+}
+```
+
+When an idempotency key is provided, repeated requests return the original transaction record.
+
+## Health Check
+
+Verify API availability:
+
+```bash
+curl http://localhost:3000/health
+```
+
+Response:
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-03-08T12:00:00.000Z"
+}
+```
+
+## SDK Support
+
+TypeScript SDK available at `packages/sdk`:
+
+```typescript
+import { createAgenticWalletClient } from '@agentic-wallet/sdk';
+
+const client = createAgenticWalletClient(
+  'http://localhost:3000',
+  {
+    apiKey: 'dev-api-key',
+    tenantId: 'my-tenant'
+  }
+);
+
+// Use typed methods
+const wallet = await client.wallet.create({ label: 'my-wallet' });
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Authentication" icon="key" href="/api/authentication">
+    Learn about API key and scope management
+  </Card>
+  <Card title="Response Format" icon="file-code" href="/api/response-format">
+    Understand the response envelope structure
+  </Card>
+  <Card title="Errors" icon="triangle-exclamation" href="/api/errors">
+    Handle errors and error codes
+  </Card>
+  <Card title="Wallets" icon="wallet" href="/api/wallets">
+    Start with wallet operations
+  </Card>
+</CardGroup>

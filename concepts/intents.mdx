@@ -1,0 +1,475 @@
+---
+title: Intents
+description: Understand intent structure, supported transaction types, and validation
+---
+
+# Intents
+
+Intents are declarative transaction requests that abstract away low-level blockchain details. The system validates, builds, and executes intents through a multi-stage pipeline.
+
+## Intent Structure
+
+Every transaction begins as an intent:
+
+```typescript
+interface TransactionRequest {
+  walletId: string;            // UUID of wallet to execute from
+  agentId?: string;            // Optional agent UUID
+  type: TransactionType;       // Intent type (see below)
+  protocol: string;            // Protocol adapter name
+  gasless?: boolean;           // Use gasless transaction path
+  idempotencyKey?: string;     // Deduplication key (8-128 chars)
+  intent: Record<string, unknown>; // Type-specific payload
+}
+```
+
+## Supported Transaction Types
+
+Agentic Wallet supports 26 transaction types:
+
+### Native Transfers
+
+<CardGroup cols={2}>
+  <Card title="transfer_sol" icon="coins">
+    Transfer native SOL between accounts.
+    
+    ```json
+    {
+      "type": "transfer_sol",
+      "protocol": "system-program",
+      "intent": {
+        "destination": "9B5XszUGdMaxCZ7...",
+        "lamports": 1000000000
+      }
+    }
+    ```
+  </Card>
+  
+  <Card title="transfer_spl" icon="money-bill-transfer">
+    Transfer SPL tokens.
+    
+    ```json
+    {
+      "type": "transfer_spl",
+      "protocol": "spl-token",
+      "intent": {
+        "destination": "9B5XszUGdMaxCZ7...",
+        "mint": "EPjFWdd5AufqSSqeM2qN1...",
+        "amount": "1000000"
+      }
+    }
+    ```
+  </Card>
+</CardGroup>
+
+### DeFi Operations
+
+<CardGroup cols={2}>
+  <Card title="swap" icon="arrow-right-arrow-left">
+    Token swaps via DEX aggregators.
+    
+    ```json
+    {
+      "type": "swap",
+      "protocol": "jupiter",
+      "intent": {
+        "inputMint": "So11111111111111...",
+        "outputMint": "EPjFWdd5AufqSSqeM...",
+        "amount": "1000000",
+        "slippageBps": 50
+      }
+    }
+    ```
+  </Card>
+  
+  <Card title="stake / unstake" icon="layer-group">
+    Staking operations (Marinade, etc).
+    
+    ```json
+    {
+      "type": "stake",
+      "protocol": "marinade",
+      "intent": {
+        "amount": "1000000000",
+        "validator": "optional-validator-key"
+      }
+    }
+    ```
+  </Card>
+  
+  <Card title="lend_supply / lend_borrow" icon="building-columns">
+    Lending protocol operations.
+    
+    ```json
+    {
+      "type": "lend_supply",
+      "protocol": "solend",
+      "intent": {
+        "mint": "EPjFWdd5AufqSSqeM...",
+        "amount": "1000000",
+        "marketAddress": "optional"
+      }
+    }
+    ```
+  </Card>
+</CardGroup>
+
+### Token Management
+
+<CardGroup cols={2}>
+  <Card title="create_mint" icon="circle-plus">
+    Create a new SPL token mint.
+    
+    ```json
+    {
+      "type": "create_mint",
+      "protocol": "spl-token",
+      "intent": {
+        "decimals": 9,
+        "supply": "1000000000"
+      }
+    }
+    ```
+  </Card>
+  
+  <Card title="mint_token" icon="plus">
+    Mint tokens to an account.
+    
+    ```json
+    {
+      "type": "mint_token",
+      "protocol": "spl-token",
+      "intent": {
+        "mint": "token-mint-address",
+        "destination": "recipient-address",
+        "amount": "1000000"
+      }
+    }
+    ```
+  </Card>
+</CardGroup>
+
+### Escrow Operations
+
+<Accordion title="Escrow Transaction Types">
+  <ParamField path="create_escrow" type="intent">
+    Create a new escrow with funds and conditions.
+  </ParamField>
+  
+  <ParamField path="accept_escrow" type="intent">
+    Accept an escrow as the counterparty.
+  </ParamField>
+  
+  <ParamField path="release_escrow" type="intent">
+    Release funds to the beneficiary.
+  </ParamField>
+  
+  <ParamField path="refund_escrow" type="intent">
+    Refund funds to the creator.
+  </ParamField>
+  
+  <ParamField path="dispute_escrow" type="intent">
+    Raise a dispute on an escrow.
+  </ParamField>
+  
+  <ParamField path="resolve_dispute" type="intent">
+    Resolve a disputed escrow.
+  </ParamField>
+  
+  <ParamField path="create_milestone_escrow" type="intent">
+    Create multi-milestone escrow.
+  </ParamField>
+  
+  <ParamField path="release_milestone" type="intent">
+    Release a specific milestone.
+  </ParamField>
+</Accordion>
+
+### Read-Only Operations
+
+<CardGroup cols={2}>
+  <Card title="query_balance" icon="magnifying-glass-dollar">
+    Query wallet balance (no signature).
+    
+    ```json
+    {
+      "type": "query_balance",
+      "protocol": "system-program",
+      "intent": {}
+    }
+    ```
+  </Card>
+  
+  <Card title="query_positions" icon="chart-line">
+    Query DeFi positions (no signature).
+    
+    ```json
+    {
+      "type": "query_positions",
+      "protocol": "system-program",
+      "intent": {}
+    }
+    ```
+  </Card>
+</CardGroup>
+
+<Note>
+Read-only intents (`query_*`) skip signing and submission phases, confirming immediately after simulation.
+</Note>
+
+### Advanced Operations
+
+<Accordion title="Advanced Intent Types">
+  <ParamField path="x402_pay" type="intent">
+    HTTP 402 payment protocol integration.
+  </ParamField>
+  
+  <ParamField path="flash_loan_bundle" type="intent">
+    Flash loan transaction bundle.
+  </ParamField>
+  
+  <ParamField path="cpi_call" type="intent">
+    Cross-Program Invocation.
+  </ParamField>
+  
+  <ParamField path="custom_instruction_bundle" type="intent">
+    Arbitrary instruction bundle.
+  </ParamField>
+  
+  <ParamField path="treasury_allocate" type="intent">
+    Treasury budget allocation.
+  </ParamField>
+  
+  <ParamField path="treasury_rebalance" type="intent">
+    Rebalance between agent budgets.
+  </ParamField>
+  
+  <ParamField path="paper_trade" type="intent">
+    Simulated trade for backtesting.
+  </ParamField>
+</Accordion>
+
+## Intent Validation
+
+Intents are validated through multiple layers:
+
+### 1. Schema Validation
+
+Zod schemas enforce type safety:
+
+```typescript
+// packages/common/src/schemas/transaction.ts:14
+export const transactionTypeSchema = z.enum([
+  'transfer_sol',
+  'transfer_spl',
+  'swap',
+  // ... all 26 types
+]);
+
+export const createTransactionRequestSchema = z.object({
+  walletId: z.string().uuid(),
+  agentId: z.string().uuid().optional(),
+  type: transactionTypeSchema,
+  protocol: z.string().min(1),
+  gasless: z.boolean().default(false),
+  idempotencyKey: z.string().min(8).max(128).optional(),
+  intent: z.record(z.unknown()).optional(),
+});
+```
+
+### 2. Protocol Compatibility
+
+The protocol adapter registry validates that the protocol supports the intent type:
+
+```typescript
+// services/protocol-adapters/src/registry.ts
+const adapter = registry.get(protocol);
+if (!adapter) {
+  throw new Error(`Unknown protocol: ${protocol}`);
+}
+
+// Check if adapter supports the operation
+if (type === 'swap' && !adapter.buildSwap) {
+  throw new Error(`Protocol ${protocol} does not support swap`);
+}
+```
+
+### 3. Policy Evaluation
+
+Policies can block or require approval for intents:
+
+```typescript
+const decision = await policyEngine.evaluate({
+  walletId,
+  type,
+  protocol,
+  destination,
+  amountLamports,
+  programIds,
+  slippageBps,
+});
+
+if (decision.decision === 'deny') {
+  return { status: 'failed', failedAt: 'policy', reasons: decision.reasons };
+}
+
+if (decision.decision === 'require_approval') {
+  return { status: 'approval_gate', reasons: decision.reasons };
+}
+```
+
+### 4. Agent Capability Check
+
+If executed by an agent, the intent must be in the allowlist:
+
+```typescript
+// services/agent-runtime/src/index.ts:170
+if (!agent.allowedIntents.includes(request.type)) {
+  return {
+    status: 403,
+    payload: { error: `Intent ${request.type} not permitted for this agent` }
+  };
+}
+```
+
+### 5. Budget Validation
+
+Spend-capable intents check agent budgets:
+
+```typescript
+const spendingTypes = new Set([
+  'transfer_sol', 'transfer_spl', 'swap',
+  'stake', 'unstake', 'lend_supply',
+  // ...
+]);
+
+if (spendingTypes.has(request.type)) {
+  const lamports = inferLamports(request.intent);
+  const budgetResult = budgetStore.spend(agent.id, lamports);
+  if (!budgetResult.ok) {
+    return { status: 403, payload: { error: budgetResult.reason } };
+  }
+}
+```
+
+## Legacy Adapter Behavior
+
+The `intent-runner` CLI provides backward compatibility:
+
+```bash
+npm run intent-runner -- --intent '{...}'
+```
+
+**Legacy transformations:**
+
+1. **Wallet ID lookup**: `fromWalletId` (base58) → internal UUID
+2. **Metadata preservation**: `chain`, `createdAt`, `reasoning` stored in `intent.legacy`
+3. **Type normalization**:
+   - `transfer` → `transfer_sol` or `transfer_spl` (based on mint presence)
+   - `swap` → `swap`
+   - `create_mint` → `create_mint`
+   - `mint_token` → `mint_token`
+
+<Note>
+Legacy adapter behavior is documented in SKILLS.md:60 for orchestrator compatibility.
+</Note>
+
+## Idempotency
+
+Use `idempotencyKey` to prevent duplicate transactions:
+
+```json
+{
+  "walletId": "...",
+  "type": "transfer_sol",
+  "protocol": "system-program",
+  "idempotencyKey": "user-payment-12345",
+  "intent": {...}
+}
+```
+
+Behavior:
+- First request: Creates new transaction
+- Duplicate key: Returns existing transaction record
+- Key scope: Per wallet
+- Key length: 8-128 characters
+
+## Gasless Transactions
+
+Set `gasless: true` to route through sponsored RPC:
+
+```json
+{
+  "type": "swap",
+  "protocol": "jupiter",
+  "gasless": true,
+  "intent": {...}
+}
+```
+
+**Requirements:**
+1. Protocol must have `gaslessEligible: true` in risk config
+2. `KORA_RPC_URL` must be configured
+3. Transaction must meet size/complexity limits
+
+<Warning>
+Not all protocols support gasless transactions. Check protocol risk configuration before enabling.
+</Warning>
+
+## Paper Trading
+
+Set `paperOnly: true` in intent to simulate without execution:
+
+```json
+{
+  "type": "swap",
+  "protocol": "jupiter",
+  "intent": {
+    "inputMint": "...",
+    "outputMint": "...",
+    "amount": "1000000",
+    "paperOnly": true
+  }
+}
+```
+
+Paper trades:
+- Skip signing and submission
+- Record to strategy store
+- Useful for backtesting and validation
+- No budget deduction
+
+## Best Practices
+
+<Accordion title="Intent Design">
+  1. Use specific intent types (not `custom_instruction_bundle`) when possible
+  2. Include all required fields for protocol adapter
+  3. Set reasonable slippage for swaps (50-200 bps typical)
+  4. Use idempotency keys for user-facing operations
+  5. Validate amounts before submission
+</Accordion>
+
+<Accordion title="Error Handling">
+  1. Check `status` and `failedAt` in response
+  2. Handle `approval_gate` status for manual approval flow
+  3. Retry on `PIPELINE_ERROR` with exponential backoff
+  4. Never retry on `POLICY_VIOLATION` or `VALIDATION_ERROR`
+  5. Monitor `errorCode` for categorization
+</Accordion>
+
+<Accordion title="Security">
+  1. Validate destinations before transfers
+  2. Use address allowlists for high-value operations
+  3. Set spending limits via policies
+  4. Audit flash_loan and cpi_call intents carefully
+  5. Restrict custom_instruction_bundle to trusted agents
+</Accordion>
+
+## Source Code Reference
+
+Intent handling is implemented in:
+
+- `packages/common/src/schemas/transaction.ts` - Intent type definitions (packages/common/src/schemas/transaction.ts:14)
+- `services/transaction-engine/src/pipeline/*` - Execution pipeline
+- `services/protocol-adapters/src/index.ts` - Protocol routing (services/protocol-adapters/src/index.ts:1)
+- `SKILLS.md` - Canonical intent contract (SKILLS.md:312)

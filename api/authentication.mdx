@@ -1,0 +1,245 @@
+---
+title: 'Authentication'
+description: 'API key authentication and scope management'
+icon: 'key'
+---
+
+## Overview
+
+The Agentic Wallet API uses API key-based authentication with scope-based access control. All requests must include a valid API key in the request headers.
+
+## API Key Header
+
+Include your API key in every request:
+
+<ParamField header="x-api-key" type="string" required>
+  Your API key for authentication
+</ParamField>
+
+```bash
+curl -H "x-api-key: your-api-key-here" \
+     http://localhost:3000/api/v1/wallets
+```
+
+## Tenant Header
+
+For multi-tenant deployments, specify the tenant:
+
+<ParamField header="x-tenant-id" type="string">
+  Tenant identifier. Use `*` for wildcard access (if permitted by your API key).
+</ParamField>
+
+```bash
+curl -H "x-api-key: your-api-key-here" \
+     -H "x-tenant-id: tenant-123" \
+     http://localhost:3000/api/v1/wallets
+```
+
+## Configuration
+
+API keys are configured via environment variables:
+
+### Enable/Disable Authentication
+
+```bash
+API_GATEWAY_ENFORCE_AUTH=true  # Set to false to disable auth (development only)
+```
+
+### API Key Format
+
+API keys follow the format:
+
+```
+key:tenant:scope1,scope2,scope3
+```
+
+Multiple keys separated by semicolons:
+
+```bash
+API_GATEWAY_API_KEYS="dev-api-key:*:all;prod-key:tenant-1:wallets,transactions"
+```
+
+**Components:**
+- `key`: The actual API key string
+- `tenant`: Tenant ID or `*` for all tenants
+- `scopes`: Comma-separated list of scopes or `all` for full access
+
+## Scopes
+
+The following scopes control access to API resources:
+
+<Tabs>
+  <Tab title="Resource Scopes">
+    | Scope | Description |
+    |-------|-------------|
+    | `wallets` | Create and manage wallets |
+    | `transactions` | Create and manage transactions |
+    | `policies` | Create and evaluate policies |
+    | `agents` | Create and manage agents |
+    | `protocols` | Access protocol adapters |
+    | `risk` | Manage risk configurations |
+    | `strategy` | Backtest and paper trading |
+    | `treasury` | Treasury allocation operations |
+    | `audit` | Access audit events and metrics |
+    | `mcp` | MCP tool access |
+    | `all` | Full access to all resources |
+  </Tab>
+  <Tab title="Examples">
+    **Development key with full access:**
+    ```bash
+    dev-api-key:*:all
+    ```
+
+    **Production key with limited scopes:**
+    ```bash
+    prod-key-abc123:tenant-1:wallets,transactions,policies
+    ```
+
+    **Read-only audit key:**
+    ```bash
+    audit-key-xyz789:*:audit
+    ```
+
+    **Agent execution key:**
+    ```bash
+    agent-key-def456:tenant-2:wallets,transactions,agents,protocols
+    ```
+  </Tab>
+</Tabs>
+
+## Example Configurations
+
+### Development Setup
+
+```bash
+API_GATEWAY_ENFORCE_AUTH=true
+API_GATEWAY_API_KEYS="dev-api-key:*:all"
+API_GATEWAY_RATE_LIMIT_PER_MINUTE=120
+```
+
+### Production Multi-Tenant
+
+```bash
+API_GATEWAY_ENFORCE_AUTH=true
+API_GATEWAY_API_KEYS="prod-key-1:tenant-a:wallets,transactions;prod-key-2:tenant-b:all;admin-key:*:all"
+API_GATEWAY_RATE_LIMIT_PER_MINUTE=60
+```
+
+## Rate Limiting
+
+Rate limits are applied per API key:
+
+```bash
+API_GATEWAY_RATE_LIMIT_PER_MINUTE=120  # Default: 120 requests/minute
+```
+
+Rate limit information is included in response headers:
+
+```http
+X-RateLimit-Limit: 120
+X-RateLimit-Remaining: 115
+X-RateLimit-Reset: 1709899260
+```
+
+## Error Responses
+
+### Missing API Key
+
+```bash
+curl http://localhost:3000/api/v1/wallets
+```
+
+Response (401 Unauthorized):
+```json
+{
+  "status": "failure",
+  "errorCode": "VALIDATION_ERROR",
+  "failedAt": "gateway",
+  "stage": "gateway",
+  "error": "Missing x-api-key header"
+}
+```
+
+### Invalid API Key
+
+```bash
+curl -H "x-api-key: invalid-key" \
+     http://localhost:3000/api/v1/wallets
+```
+
+Response (401 Unauthorized):
+```json
+{
+  "status": "failure",
+  "errorCode": "VALIDATION_ERROR",
+  "failedAt": "gateway",
+  "stage": "gateway",
+  "error": "Invalid API key"
+}
+```
+
+### Insufficient Scope
+
+```bash
+curl -H "x-api-key: limited-key" \
+     http://localhost:3000/api/v1/policies
+```
+
+Response (403 Forbidden):
+```json
+{
+  "status": "failure",
+  "errorCode": "VALIDATION_ERROR",
+  "failedAt": "gateway",
+  "stage": "gateway",
+  "error": "Insufficient scope: requires 'policies'"
+}
+```
+
+### Rate Limit Exceeded
+
+Response (429 Too Many Requests):
+```json
+{
+  "status": "failure",
+  "errorCode": "VALIDATION_ERROR",
+  "failedAt": "gateway",
+  "stage": "gateway",
+  "error": "Rate limit exceeded"
+}
+```
+
+## Security Best Practices
+
+<Warning>
+  Never expose API keys in client-side code, version control, or public repositories.
+</Warning>
+
+<Tip>
+  Use environment variables or secure secret management systems to store API keys.
+</Tip>
+
+**Recommendations:**
+1. Use separate API keys for different environments (dev, staging, production)
+2. Apply principle of least privilege - grant only required scopes
+3. Rotate API keys regularly
+4. Monitor API key usage via audit logs
+5. Use tenant-specific keys for multi-tenant deployments
+6. Set appropriate rate limits based on usage patterns
+
+## Testing Authentication
+
+Verify your API key works:
+
+```bash
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/health
+```
+
+Expected response:
+```json
+{
+  "status": "ok",
+  "timestamp": "2026-03-08T12:00:00.000Z"
+}
+```

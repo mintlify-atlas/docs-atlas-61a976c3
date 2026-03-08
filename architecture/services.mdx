@@ -1,0 +1,720 @@
+---
+title: 'Service Architecture'
+description: 'Detailed breakdown of all services, their responsibilities, and communication patterns'
+---
+
+## Service Map
+
+Agentic Wallet consists of **7 services + 2 apps** orchestrated through a central API Gateway:
+
+| Service | Port | Responsibility |
+|---------|------|----------------|
+| `apps/api-gateway` | **3000** | Auth, tenant scope checks, rate limiting, response normalization, routing |
+| `services/wallet-engine` | **3002** | Wallet creation, key custody, signing APIs, SOL/SPL balance reads |
+| `services/policy-engine` | **3003** | Allow/deny/require_approval rule evaluation |
+| `services/agent-runtime` | **3004** | Agent lifecycle, capabilities, execution modes, treasury/strategy endpoints |
+| `services/protocol-adapters` | **3005** | Protocol registry, quote/build endpoints, escrow adapter |
+| `services/transaction-engine` | **3006** | Transaction lifecycle, simulation, policy gate, submit/confirm, proofs, outbox |
+| `services/audit-observability` | **3007** | Audit events and metrics aggregation |
+| `services/mcp-server` | **3008** | MCP-compatible tools and generic gateway proxy tool |
+| `packages/common` | N/A | Shared schemas, types, validation |
+| `packages/sdk` | N/A | Typed client for API gateway |
+
+---
+
+## API Gateway (Port 3000)
+
+<Card title="apps/api-gateway" icon="door-open">
+  **Entry point for all external requests**
+</Card>
+
+### Responsibilities
+
+- **Authentication**: API key validation (`x-api-key` header)
+- **Authorization**: Route-based scope checking (wallets, transactions, policies, agents, protocols, etc.)
+- **Tenant Isolation**: Optional tenant boundary enforcement (`x-tenant-id` header)
+- **Rate Limiting**: Per-key rate limiting (default 120 req/min)
+- **Response Normalization**: Converts all upstream responses to stable machine envelope
+- **Routing**: Proxies requests to appropriate backend services
+
+### Technology Stack
+
+- **Framework**: Hono
+- **Runtime**: Node.js
+- **State**: In-memory rate limit tracking
+
+### Configuration
+
+```bash
+API_GATEWAY_PORT=3000
+API_GATEWAY_ENFORCE_AUTH=true
+API_GATEWAY_API_KEYS=dev-api-key:*:all
+API_GATEWAY_RATE_LIMIT_PER_MINUTE=120
+```
+
+### Normalized Response Envelope
+
+Every response includes:
+
+```json
+{
+  "status": "success" | "failure",
+  "errorCode": "VALIDATION_ERROR" | "POLICY_VIOLATION" | "PIPELINE_ERROR" | "CONFIRMATION_FAILED" | null,
+  "failedAt": "validation" | "policy" | "build" | "sign" | "send" | "confirm" | "completed" | "gateway" | null,
+  "stage": "validation" | "policy" | "build" | "sign" | "send" | "confirm" | "completed" | "gateway",
+  "traceId": "uuid",
+  "data": { /* actual response payload */ },
+  "error": "error message (if failure)",
+  "errorMessage": "error message (if failure)"
+}
+```
+
+### Routing Table
+
+| Route Pattern | Target Service | Scope |
+|---------------|----------------|-------|
+| `/api/v1/wallets/**` | wallet-engine | `wallets` |
+| `/api/v1/transactions/**` | transaction-engine | `transactions` |
+| `/api/v1/policies/**` | policy-engine | `policies` |
+| `/api/v1/agents/**` | agent-runtime | `agents` |
+| `/api/v1/protocols/**` | protocol-adapters | `protocols` |
+| `/api/v1/risk/**` | transaction-engine | `risk` |
+| `/api/v1/audit/**` | audit-observability | `audit` |
+| `/mcp/**` | mcp-server | `mcp` |
+
+---
+
+## Wallet Engine (Port 3002)
+
+<Card title="services/wallet-engine" icon="wallet" iconType="solid">
+  **Key custody and signing boundary**
+</Card>
+
+### Responsibilities
+
+- **Wallet Creation**: Generate new Solana keypairs
+- **Key Storage**: Persist encrypted private keys
+- **Transaction Signing**: Sign legacy and versioned transactions
+- **Message Signing**: Sign arbitrary messages (not yet exposed)
+- **Balance Queries**: Fetch SOL balance and SPL token balances
+- **Signer Backend Abstraction**: Support multiple custody strategies
+
+### Key Features
+
+<CardGroup cols={2}>
+  <Card title="Pluggable Backends" icon="plug">
+    - `encrypted-file`: AES-256-GCM on disk
+    - `memory`: Ephemeral in-memory
+    - `kms`: Key management service
+    - `hsm`: Hardware security module
+    - `mpc`: Multi-party computation
+  </Card>
+
+  <Card title="Encryption Details" icon="lock">
+    - **Algorithm**: AES-256-GCM
+    - **Key Derivation**: scrypt
+    - **Per-record**: Random salt + IV
+    - **Auth Tag**: Verified on decrypt
+  </Card>
+</CardGroup>
+
+### Technology Stack
+
+- **Framework**: Hono
+- **Storage**: SQLite (metadata) + file storage (encrypted keys)
+- **Crypto**: Node.js `crypto` module
+- **RPC**: `@solana/web3.js`, `@solana/spl-token`
+
+### Configuration
+
+```bash
+WALLET_ENGINE_PORT=3002
+WALLET_ENGINE_DATA_DIR=./data/wallet-engine
+WALLET_SIGNER_BACKEND=encrypted-file
+WALLET_KEY_ENCRYPTION_SECRET=your-secret-here
+
+# KMS backend
+WALLET_KMS_MASTER_SECRET=...
+WALLET_KMS_KEY_ID=...
+
+# HSM backend
+WALLET_HSM_PIN=...
+WALLET_HSM_MODULE_SECRET=...
+WALLET_HSM_SLOT=0
+
+# MPC backend (requires 3 node secrets)
+WALLET_MPC_NODE_SECRETS=secret1,secret2,secret3
+```
+
+### Key Endpoints
+
+- `POST /api/v1/wallets` - Create new wallet
+- `GET /api/v1/wallets/:walletId` - Get wallet info
+- `GET /api/v1/wallets/:walletId/balance` - Get SOL balance
+- `GET /api/v1/wallets/:walletId/tokens` - Get SPL token balances
+- `POST /api/v1/wallets/:walletId/sign` - Sign transaction
+
+<Note>
+  The wallet-engine is the **only service** that can read private keys and sign transactions. This creates a security boundary where agents and external clients never have access to key material.
+</Note>
+
+---
+
+## Policy Engine (Port 3003)
+
+<Card title="services/policy-engine" icon="shield-check" iconType="solid">
+  **Policy evaluation and rule engine**
+</Card>
+
+### Responsibilities
+
+- **Policy Creation**: Define wallet-specific policies with versioned rules
+- **Policy Evaluation**: Execute rule evaluation for transaction requests
+- **Rule Types**: Support 11 rule types (spending limits, allowlists, rate limits, etc.)
+- **Versioning**: Track policy version history with migration support
+- **Fail-Secure**: Return `deny` on evaluation errors
+
+### Supported Rule Types
+
+<Accordion title="Spending & Rate Controls">
+  - `spending_limit`: Max lamports per transaction or time window
+  - `rate_limit`: Max transactions per time period
+  - `time_window`: Restrict execution to specific hours/days
+</Accordion>
+
+<Accordion title="Address & Program Controls">
+  - `address_allowlist`: Permitted destination addresses
+  - `address_blocklist`: Blocked destination addresses
+  - `program_allowlist`: Permitted Solana program IDs
+  - `token_allowlist`: Permitted SPL token mints
+  - `protocol_allowlist`: Permitted protocol names
+</Accordion>
+
+<Accordion title="Risk Controls">
+  - `max_slippage`: Maximum slippage tolerance for swaps
+  - `protocol_risk`: Protocol-specific risk parameters
+  - `portfolio_risk`: Portfolio-level exposure limits
+</Accordion>
+
+### Technology Stack
+
+- **Framework**: Hono
+- **Storage**: SQLite (policies + evaluation state)
+- **Validation**: Zod schemas from `@agentic-wallet/common`
+
+### Configuration
+
+```bash
+POLICY_ENGINE_PORT=3003
+POLICY_ENGINE_DATA_DIR=./data/policy-engine
+```
+
+### Key Endpoints
+
+- `POST /api/v1/policies` - Create policy
+- `PUT /api/v1/policies/:policyId` - Update policy
+- `GET /api/v1/wallets/:walletId/policies` - List wallet policies
+- `POST /api/v1/evaluate` - Evaluate transaction against policies
+- `GET /api/v1/policies/:policyId/versions` - Get policy version history
+- `POST /api/v1/policies/:policyId/migrate` - Migrate policy to new version
+
+### Decision Output
+
+```typescript
+{
+  decision: 'allow' | 'deny' | 'require_approval',
+  reasons: string[],
+  riskTier: 'low' | 'medium' | 'high'
+}
+```
+
+---
+
+## Transaction Engine (Port 3006)
+
+<Card title="services/transaction-engine" icon="gears" iconType="solid">
+  **Transaction orchestration and execution pipeline**
+</Card>
+
+### Responsibilities
+
+- **Transaction Lifecycle Management**: Orchestrate full execution pipeline
+- **Build**: Construct unsigned transactions (local or via protocol-adapters)
+- **Simulation**: Pre-execution validation via Solana RPC
+- **Risk Evaluation**: Protocol risk and portfolio risk checks
+- **Policy Gate**: Call policy-engine for evaluation
+- **Approval Gate**: Pause for manual approval when required
+- **Signing**: Request signature from wallet-engine
+- **Submission**: Submit to Solana RPC (or Kora for gasless)
+- **Confirmation**: Wait for transaction confirmation
+- **Proof Generation**: Create execution proof with hashes
+- **Position Tracking**: Index DeFi positions (stake, lend, escrow)
+- **Durable Outbox**: Queue with lease/retry for reliability
+
+### Transaction Lifecycle States
+
+```text
+pending -> simulating -> policy_eval -> approval_gate -> signing -> submitting -> confirmed
+                                    |
+                                    v
+                                 failed
+```
+
+### Technology Stack
+
+- **Framework**: Hono
+- **Storage**: SQLite (transactions, outbox, risk configs, positions, escrows, proofs)
+- **RPC**: `@solana/web3.js` with failover pool
+- **Execution Tuning**: Adaptive priority fee and compute budget
+
+### Configuration
+
+```bash
+TRANSACTION_ENGINE_PORT=3006
+TRANSACTION_ENGINE_DATA_DIR=./data/transaction-engine
+SOLANA_RPC_URL=https://api.devnet.solana.com
+SOLANA_RPC_POOL_URLS=https://api.devnet.solana.com,https://rpc.ankr.com/solana_devnet
+SOLANA_RPC_HEALTH_PROBE_MS=15000
+SOLANA_PRIORITY_FEE_MIN_MICROLAMPORTS=2000
+SOLANA_PRIORITY_FEE_MAX_MICROLAMPORTS=200000
+SOLANA_PRIORITY_FEE_PERCENTILE=75
+SOLANA_PRIORITY_FEE_MULTIPLIER_BPS=1150
+DELTA_GUARD_ABSOLUTE_TOLERANCE_LAMPORTS=10000
+TX_OUTBOX_LEASE_MS=30000
+TX_OUTBOX_POLL_MS=2000
+TX_OUTBOX_MAX_ATTEMPTS=6
+```
+
+### Key Endpoints
+
+<Accordion title="Transaction Operations">
+  - `POST /api/v1/transactions` - Create transaction
+  - `GET /api/v1/transactions/:txId` - Get transaction status
+  - `POST /api/v1/transactions/:txId/retry` - Retry failed transaction
+  - `POST /api/v1/transactions/:txId/approve` - Approve pending transaction
+  - `POST /api/v1/transactions/:txId/reject` - Reject pending transaction
+  - `GET /api/v1/transactions/:txId/proof` - Get execution proof
+  - `GET /api/v1/transactions/:txId/replay` - Get replay data
+</Accordion>
+
+<Accordion title="Wallet Queries">
+  - `GET /api/v1/wallets/:walletId/transactions` - List wallet transactions
+  - `GET /api/v1/wallets/:walletId/pending-approvals` - List pending approvals
+  - `GET /api/v1/wallets/:walletId/positions` - List DeFi positions
+  - `GET /api/v1/wallets/:walletId/escrows` - List escrow positions
+</Accordion>
+
+<Accordion title="Risk Controls">
+  - `GET /api/v1/risk/protocols` - List protocol risk configs
+  - `GET /api/v1/risk/protocols/:protocol` - Get protocol risk config
+  - `PUT /api/v1/risk/protocols/:protocol` - Update protocol risk config
+  - `GET /api/v1/risk/portfolio` - List portfolio risk configs
+  - `GET /api/v1/risk/portfolio/:walletId` - Get wallet portfolio risk
+  - `PUT /api/v1/risk/portfolio/:walletId` - Update wallet portfolio risk
+</Accordion>
+
+<Accordion title="Chaos Engineering">
+  - `GET /api/v1/chaos` - Get chaos switchboard config
+  - `PUT /api/v1/chaos` - Update chaos switchboard config
+</Accordion>
+
+### Execution Proof Structure
+
+```typescript
+{
+  intentHash: string,      // SHA-256 of intent
+  policyHash: string,      // SHA-256 of policy decision
+  simulationHash: string,  // SHA-256 of simulation result
+  proofHash: string,       // SHA-256 of combined proof
+  signature: string,       // Solana transaction signature
+  txId: string,
+  walletId: string,
+  agentId?: string,
+  timestamp: string
+}
+```
+
+---
+
+## Agent Runtime (Port 3004)
+
+<Card title="services/agent-runtime" icon="robot" iconType="solid">
+  **Agent lifecycle and autonomous execution**
+</Card>
+
+### Responsibilities
+
+- **Agent Management**: Create, start, stop, pause, resume agents
+- **Capability Control**: Intent and protocol allowlists per agent
+- **Execution Modes**: Supervised vs autonomous operation
+- **Autonomous Decision Engine**: Rule-based autonomous strategy execution
+- **Budget Management**: Per-agent spending budgets
+- **Capability Manifests**: Issue and verify signed capability manifests
+- **Strategy Execution**: Backtesting and paper trading
+- **Treasury Operations**: Budget allocation and rebalancing
+
+### Execution Modes
+
+<CardGroup cols={2}>
+  <Card title="Supervised" icon="user-check">
+    Agent executes only when explicitly called via API. Used for agent-driven execution where the agent makes all decisions.
+  </Card>
+
+  <Card title="Autonomous" icon="wand-magic-sparkles">
+    Agent runs on a scheduler with built-in decision engine. Executes strategies based on conditions, cadence, and cooldowns.
+  </Card>
+</CardGroup>
+
+### Technology Stack
+
+- **Framework**: Hono
+- **Storage**: SQLite (agents, budgets, strategies, paper trades)
+- **Scheduler**: Interval-based loop with per-agent decision state
+- **Manifest Signing**: HMAC-SHA256 with secret
+
+### Configuration
+
+```bash
+AGENT_RUNTIME_PORT=3004
+AGENT_RUNTIME_DATA_DIR=./data/agent-runtime
+AGENT_LOOP_INTERVAL_MS=5000
+AGENT_MANIFEST_SIGNING_SECRET=dev-manifest-secret
+AGENT_MANIFEST_ISSUER=agent-runtime
+AGENT_REQUIRE_MANIFEST=false
+AGENT_REQUIRE_BACKTEST_PASS=false
+AGENT_PAUSE_WEBHOOK_SECRET=
+```
+
+### Key Endpoints
+
+<Accordion title="Agent Lifecycle">
+  - `POST /api/v1/agents` - Create agent
+  - `GET /api/v1/agents` - List agents
+  - `GET /api/v1/agents/:agentId` - Get agent
+  - `PUT /api/v1/agents/:agentId/capabilities` - Update capabilities
+  - `POST /api/v1/agents/:agentId/start` - Start agent
+  - `POST /api/v1/agents/:agentId/stop` - Stop agent
+  - `POST /api/v1/agents/:agentId/pause` - Pause agent
+  - `POST /api/v1/agents/:agentId/resume` - Resume agent
+</Accordion>
+
+<Accordion title="Budget & Treasury">
+  - `GET /api/v1/agents/:agentId/budget` - Get agent budget
+  - `POST /api/v1/treasury/allocate` - Allocate funds to agent
+  - `POST /api/v1/treasury/rebalance` - Rebalance between agents
+</Accordion>
+
+<Accordion title="Strategy & Backtesting">
+  - `POST /api/v1/strategy/backtest` - Run backtest
+  - `POST /api/v1/strategy/paper/execute` - Paper trade execution
+  - `GET /api/v1/strategy/paper/:agentId` - List paper trades
+</Accordion>
+
+<Accordion title="Capability Manifests">
+  - `POST /api/v1/agents/:agentId/manifest/issue` - Issue signed manifest
+  - `POST /api/v1/agents/:agentId/manifest/verify` - Verify manifest
+</Accordion>
+
+<Accordion title="Execution">
+  - `POST /api/v1/agents/:agentId/execute` - Execute agent intent
+  - `GET /api/v1/agents/:agentId/autonomy/state` - Get autonomy state
+</Accordion>
+
+---
+
+## Protocol Adapters (Port 3005)
+
+<Card title="services/protocol-adapters" icon="plug" iconType="solid">
+  **Protocol-specific transaction building**
+</Card>
+
+### Responsibilities
+
+- **Adapter Registry**: Register and manage protocol adapters
+- **Quote Fetching**: Get swap quotes from DEX protocols
+- **Transaction Building**: Construct protocol-specific instructions
+- **Health Checks**: Verify protocol adapter health and dependencies
+- **Version Management**: Track adapter versions and migrations
+- **Intent Migration**: Migrate intents between adapter versions
+
+### Supported Protocols (7 + system)
+
+<CardGroup cols={2}>
+  <Card title="System Program" icon="coins">
+    `transfer_sol` - Native SOL transfers
+  </Card>
+
+  <Card title="SPL Token" icon="coins">
+    `transfer_spl`, `create_mint`, `mint_token` - Token operations
+  </Card>
+
+  <Card title="Jupiter" icon="arrow-right-arrow-left">
+    `swap` - Aggregated DEX swaps with quote API
+  </Card>
+
+  <Card title="Marinade" icon="droplet">
+    `stake`, `unstake` - Liquid staking (mSOL)
+  </Card>
+
+  <Card title="Solend" icon="building-columns">
+    `lend_supply`, `lend_borrow` - Lending protocol
+  </Card>
+
+  <Card title="Metaplex" icon="image">
+    NFT minting intents (static builder)
+  </Card>
+
+  <Card title="Orca" icon="fish">
+    DEX swap intents (static builder)
+  </Card>
+
+  <Card title="Raydium" icon="water">
+    DEX swap intents (static builder)
+  </Card>
+
+  <Card title="Escrow (Anchor)" icon="handshake">
+    9 escrow instructions backed by real on-chain program:
+    - `create_escrow`, `accept_escrow`, `release_escrow`
+    - `refund_escrow`, `dispute_escrow`, `resolve_dispute`
+    - `create_milestone_escrow`, `release_milestone`, `x402_pay`
+  </Card>
+</CardGroup>
+
+### Technology Stack
+
+- **Framework**: Hono
+- **Storage**: In-memory adapter registry
+- **External APIs**: Jupiter API for quotes, protocol-specific APIs
+
+### Configuration
+
+```bash
+PROTOCOL_ADAPTERS_PORT=3005
+JUPITER_API_URL=https://lite-api.jup.ag/swap/v1
+ESCROW_PROGRAM_ID=<deployed_program_id>
+KORA_RPC_URL=http://localhost:8080
+```
+
+### Key Endpoints
+
+<Accordion title="Registry & Metadata">
+  - `GET /api/v1/protocols` - List all protocols
+  - `GET /api/v1/protocols/:protocol/capabilities` - Get protocol capabilities
+  - `GET /api/v1/protocols/:protocol/version` - Get protocol version
+  - `GET /api/v1/protocols/health` - Health check all protocols
+  - `GET /api/v1/protocols/:protocol/health` - Health check specific protocol
+</Accordion>
+
+<Accordion title="Versioning & Migration">
+  - `POST /api/v1/protocols/:protocol/compatibility-check` - Check version compatibility
+  - `POST /api/v1/protocols/:protocol/migrate-intent` - Migrate intent between versions
+</Accordion>
+
+<Accordion title="DeFi Operations">
+  - `POST /api/v1/defi/quote` - Get swap quote
+  - `POST /api/v1/defi/swap` - Build swap transaction
+  - `POST /api/v1/defi/stake` - Build stake transaction
+  - `POST /api/v1/defi/unstake` - Build unstake transaction
+  - `POST /api/v1/defi/lend/supply` - Build lend supply transaction
+  - `POST /api/v1/defi/lend/borrow` - Build lend borrow transaction
+</Accordion>
+
+<Accordion title="Escrow Operations">
+  - `POST /api/v1/escrow/create` - Create escrow
+  - `POST /api/v1/escrow/:id/accept` - Accept escrow
+  - `POST /api/v1/escrow/:id/release` - Release escrow
+  - `POST /api/v1/escrow/:id/refund` - Refund escrow
+  - `POST /api/v1/escrow/:id/dispute` - Dispute escrow
+  - `POST /api/v1/escrow/:id/resolve` - Resolve dispute
+</Accordion>
+
+<Accordion title="Generic Builder">
+  - `POST /api/v1/build` - Generic intent builder (used by transaction-engine)
+</Accordion>
+
+---
+
+## Audit & Observability (Port 3007)
+
+<Card title="services/audit-observability" icon="chart-line" iconType="solid">
+  **Audit event stream and metrics aggregation**
+</Card>
+
+### Responsibilities
+
+- **Audit Event Ingestion**: Accept audit events from all services
+- **Event Storage**: Persist events to SQLite
+- **Event Querying**: Query audit log by entity, type, or time range
+- **Metrics Counting**: Increment counters for operational metrics
+- **Metrics Retrieval**: Retrieve counter values
+
+### Technology Stack
+
+- **Framework**: Hono
+- **Storage**: SQLite (audit events + metrics)
+
+### Configuration
+
+```bash
+AUDIT_OBSERVABILITY_PORT=3007
+AUDIT_OBSERVABILITY_DATA_DIR=./data/audit-observability
+```
+
+### Key Endpoints
+
+- `POST /api/v1/audit/events` - Submit audit event
+- `GET /api/v1/audit/events` - Query audit events
+- `POST /api/v1/metrics/inc` - Increment metric counter
+- `GET /api/v1/metrics` - Get all metric counters
+
+### Audit Event Schema
+
+```typescript
+{
+  id: string,
+  entityType: 'transaction' | 'agent' | 'wallet' | 'policy',
+  entityId: string,
+  eventType: string,
+  timestamp: string,
+  payload: Record<string, unknown>,
+  txId?: string,
+  walletId?: string,
+  agentId?: string,
+  protocol?: string,
+  escrowId?: string
+}
+```
+
+---
+
+## MCP Server (Port 3008)
+
+<Card title="services/mcp-server" icon="wrench" iconType="solid">
+  **Model Context Protocol tool interface**
+</Card>
+
+### Responsibilities
+
+- **MCP Tools**: Expose wallet operations as MCP tools
+- **Gateway Proxy**: Generic `gateway.request` tool for arbitrary API calls
+- **Tool Discovery**: List available tools with schemas
+
+### Technology Stack
+
+- **Framework**: Hono
+- **Protocol**: MCP (Model Context Protocol)
+
+### Configuration
+
+```bash
+MCP_SERVER_PORT=3008
+```
+
+### Key Endpoints
+
+- `GET /mcp/tools` - List available MCP tools
+- `POST /mcp/call` - Call MCP tool
+
+### Available MCP Tools
+
+- `wallet.create` - Create new wallet
+- `wallet.balance` - Get wallet balance
+- `tx.create` - Create transaction
+- `tx.get` - Get transaction
+- `policy.evaluate` - Evaluate policy
+- `protocol.quote` - Get protocol quote
+- `agent.execute` - Execute agent intent
+- `risk.get_protocol` - Get protocol risk config
+- `risk.set_protocol` - Set protocol risk config
+- `gateway.request` - Generic gateway proxy (validated routes only)
+
+---
+
+## Shared Packages
+
+### packages/common
+
+<Card title="@agentic-wallet/common" icon="box">
+  **Shared schemas, types, and validation**
+</Card>
+
+- **Zod Schemas**: All request/response schemas
+- **Type Exports**: TypeScript types for all entities
+- **Validation**: Centralized validation logic
+
+### packages/sdk
+
+<Card title="@agentic-wallet/sdk" icon="code">
+  **Typed TypeScript client**
+</Card>
+
+- **Type-Safe Client**: Fully typed API client
+- **Error Handling**: Normalized error responses
+- **Request Building**: Helper methods for all endpoints
+
+---
+
+## Inter-Service Communication
+
+### Communication Pattern
+
+All services communicate via **HTTP REST APIs** on localhost:
+
+```typescript
+// Transaction Engine calling Wallet Engine
+const wallet = await fetch(`${walletEngineUrl}/api/v1/wallets/${walletId}`);
+
+// Transaction Engine calling Policy Engine
+const decision = await fetch(`${policyEngineUrl}/api/v1/evaluate`, {
+  method: 'POST',
+  body: JSON.stringify(evaluationRequest)
+});
+```
+
+### Service Discovery
+
+Services are discovered via **environment variables**:
+
+```bash
+WALLET_ENGINE_URL=http://localhost:3002
+POLICY_ENGINE_URL=http://localhost:3003
+AGENT_RUNTIME_URL=http://localhost:3004
+PROTOCOL_ADAPTERS_URL=http://localhost:3005
+TRANSACTION_ENGINE_URL=http://localhost:3006
+AUDIT_OBSERVABILITY_URL=http://localhost:3007
+MCP_SERVER_URL=http://localhost:3008
+```
+
+### Error Handling
+
+Services use **fail-secure** error handling:
+
+- If policy-engine is unreachable → transaction-engine returns `deny`
+- If wallet-engine signing fails → transaction-engine marks transaction as `failed`
+- If RPC is unavailable → RPC pool failover kicks in
+
+### Best-Effort Sinks
+
+Audit and metrics calls are **best-effort**:
+
+```typescript
+try {
+  await fetch(`${auditUrl}/api/v1/audit/events`, { ... });
+} catch {
+  // Audit failure does not block transaction execution
+}
+```
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Execution Flow" icon="diagram-project" href="/architecture/execution-flow">
+    Deep dive into transaction and escrow lifecycles
+  </Card>
+
+  <Card title="Trust Boundaries" icon="shield-halved" href="/architecture/trust-boundaries">
+    Security model and control boundaries
+  </Card>
+</CardGroup>

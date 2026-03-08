@@ -1,0 +1,484 @@
+---
+title: 'Policies'
+description: 'Policy creation, evaluation, and management'
+icon: 'shield-halved'
+---
+
+## Create Policy
+
+Create a policy with rules to govern wallet transactions.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "walletId": "550e8400-e29b-41d4-a716-446655440000",
+    "name": "Trading Limits",
+    "active": true,
+    "rules": [
+      {
+        "type": "spending_limit",
+        "maxLamportsPerTx": 10000000,
+        "maxLamportsPerDay": 100000000,
+        "requireApprovalAboveLamports": 50000000
+      },
+      {
+        "type": "protocol_allowlist",
+        "protocols": ["system-program", "jupiter", "marinade"]
+      }
+    ]
+  }' \
+  http://localhost:3000/api/v1/policies
+```
+
+### Request Body
+
+<ParamField body="walletId" type="string" required>
+  Wallet UUID this policy applies to
+</ParamField>
+
+<ParamField body="name" type="string" required>
+  Policy name (1-128 characters)
+</ParamField>
+
+<ParamField body="active" type="boolean" default={true}>
+  Whether policy is active
+</ParamField>
+
+<ParamField body="rules" type="array" required>
+  Array of policy rules (see Rule Types below)
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="string" required>
+  Policy UUID
+</ResponseField>
+
+<ResponseField name="walletId" type="string" required>
+  Wallet UUID
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Policy name
+</ResponseField>
+
+<ResponseField name="version" type="number" required>
+  Policy version number (starts at 1)
+</ResponseField>
+
+<ResponseField name="active" type="boolean" required>
+  Active status
+</ResponseField>
+
+<ResponseField name="rules" type="array" required>
+  Policy rules
+</ResponseField>
+
+<ResponseField name="createdAt" type="string" required>
+  ISO 8601 timestamp
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string" required>
+  ISO 8601 timestamp
+</ResponseField>
+
+---
+
+## Rule Types
+
+<Tabs>
+  <Tab title="Spending Limit">
+    ```json
+    {
+      "type": "spending_limit",
+      "maxLamportsPerTx": 10000000,
+      "maxLamportsPerDay": 100000000,
+      "requireApprovalAboveLamports": 50000000
+    }
+    ```
+    
+    **Fields:**
+    - `maxLamportsPerTx` - Maximum lamports per transaction
+    - `maxLamportsPerDay` - Maximum lamports per 24-hour period
+    - `requireApprovalAboveLamports` - Amount threshold requiring manual approval
+  </Tab>
+  <Tab title="Address Allowlist">
+    ```json
+    {
+      "type": "address_allowlist",
+      "addresses": [
+        "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy",
+        "8yMLvVhYW0YrHZaN4Kx9xWIHK7S5tO3hqW0nQ4mM6fYz"
+      ]
+    }
+    ```
+    
+    Only allows transactions to specified addresses.
+  </Tab>
+  <Tab title="Address Blocklist">
+    ```json
+    {
+      "type": "address_blocklist",
+      "addresses": [
+        "BlockedAddr111111111111111111111111111111111"
+      ]
+    }
+    ```
+    
+    Blocks transactions to specified addresses.
+  </Tab>
+  <Tab title="Program Allowlist">
+    ```json
+    {
+      "type": "program_allowlist",
+      "programIds": [
+        "11111111111111111111111111111111",
+        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+      ]
+    }
+    ```
+    
+    Only allows transactions invoking specified program IDs.
+  </Tab>
+  <Tab title="Token Allowlist">
+    ```json
+    {
+      "type": "token_allowlist",
+      "mints": [
+        "So11111111111111111111111111111111111111112",
+        "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+      ]
+    }
+    ```
+    
+    Only allows transactions with specified token mints.
+  </Tab>
+  <Tab title="Protocol Allowlist">
+    ```json
+    {
+      "type": "protocol_allowlist",
+      "protocols": ["system-program", "jupiter", "marinade"]
+    }
+    ```
+    
+    Only allows specified protocols.
+  </Tab>
+  <Tab title="Rate Limit">
+    ```json
+    {
+      "type": "rate_limit",
+      "maxTx": 10,
+      "windowSeconds": 3600
+    }
+    ```
+    
+    Limits number of transactions per time window.
+  </Tab>
+  <Tab title="Time Window">
+    ```json
+    {
+      "type": "time_window",
+      "startHourUtc": 9,
+      "endHourUtc": 17
+    }
+    ```
+    
+    Only allows transactions during specified UTC hours.
+  </Tab>
+  <Tab title="Max Slippage">
+    ```json
+    {
+      "type": "max_slippage",
+      "maxBps": 100
+    }
+    ```
+    
+    Maximum allowed slippage for swaps (in basis points).
+  </Tab>
+  <Tab title="Protocol Risk">
+    ```json
+    {
+      "type": "protocol_risk",
+      "protocol": "jupiter",
+      "maxSlippageBps": 50,
+      "maxPoolConcentrationBps": 5000,
+      "allowedPools": ["pool1", "pool2"],
+      "allowedPrograms": ["JUP..."]
+    }
+    ```
+    
+    Protocol-specific risk controls.
+  </Tab>
+  <Tab title="Portfolio Risk">
+    ```json
+    {
+      "type": "portfolio_risk",
+      "maxDrawdownLamports": 100000000,
+      "maxDailyLossLamports": 50000000,
+      "maxExposureBpsPerToken": 2500,
+      "maxExposureBpsPerProtocol": 5000
+    }
+    ```
+    
+    Portfolio-level risk limits.
+  </Tab>
+</Tabs>
+
+---
+
+## Update Policy
+
+Update an existing policy (creates new version).
+
+```bash cURL
+curl -X PUT \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Updated Trading Limits",
+    "rules": [
+      {
+        "type": "spending_limit",
+        "maxLamportsPerTx": 20000000
+      }
+    ]
+  }' \
+  http://localhost:3000/api/v1/policies/123e4567-e89b-12d3-a456-426614174000
+```
+
+### Path Parameters
+
+<ParamField path="policyId" type="string" required>
+  Policy UUID
+</ParamField>
+
+### Request Body
+
+<ParamField body="name" type="string">
+  New policy name
+</ParamField>
+
+<ParamField body="rules" type="array">
+  New rules array
+</ParamField>
+
+<ParamField body="active" type="boolean">
+  Active status
+</ParamField>
+
+<Info>
+  Updating a policy creates a new version. The version number increments automatically.
+</Info>
+
+---
+
+## List Wallet Policies
+
+List all policies for a wallet.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/wallets/550e8400-e29b-41d4-a716-446655440000/policies
+```
+
+### Path Parameters
+
+<ParamField path="walletId" type="string" required>
+  Wallet UUID
+</ParamField>
+
+---
+
+## Evaluate Policy
+
+Test if an operation would pass policy evaluation.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "walletId": "550e8400-e29b-41d4-a716-446655440000",
+    "type": "transfer_sol",
+    "protocol": "system-program",
+    "destination": "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy",
+    "amountLamports": 1000000
+  }' \
+  http://localhost:3000/api/v1/evaluate
+```
+
+### Request Body
+
+<ParamField body="walletId" type="string" required>
+  Wallet UUID
+</ParamField>
+
+<ParamField body="type" type="string" required>
+  Transaction type
+</ParamField>
+
+<ParamField body="protocol" type="string" required>
+  Protocol name
+</ParamField>
+
+<ParamField body="destination" type="string">
+  Destination address
+</ParamField>
+
+<ParamField body="tokenMint" type="string">
+  Token mint address
+</ParamField>
+
+<ParamField body="amountLamports" type="number">
+  Amount in lamports
+</ParamField>
+
+<ParamField body="programIds" type="array">
+  Program IDs involved
+</ParamField>
+
+<ParamField body="slippageBps" type="number">
+  Slippage in basis points
+</ParamField>
+
+### Response
+
+<ResponseField name="decision" type="enum" required>
+  `allow`, `deny`, or `require_approval`
+</ResponseField>
+
+<ResponseField name="reasons" type="array" required>
+  Array of reason strings explaining the decision
+</ResponseField>
+
+<ResponseField name="riskTier" type="enum" required>
+  `low`, `medium`, `high`, or `critical`
+</ResponseField>
+
+```json
+{
+  "status": "success",
+  "data": {
+    "decision": "allow",
+    "reasons": [
+      "Within spending limit",
+      "Protocol is allowed",
+      "Destination not blocklisted"
+    ],
+    "riskTier": "low"
+  }
+}
+```
+
+---
+
+## Get Policy Versions
+
+List all versions of a policy.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/policies/123e4567-e89b-12d3-a456-426614174000/versions
+```
+
+### Path Parameters
+
+<ParamField path="policyId" type="string" required>
+  Policy UUID
+</ParamField>
+
+---
+
+## Get Policy Version
+
+Retrieve a specific policy version.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/policies/123e4567-e89b-12d3-a456-426614174000/versions/2
+```
+
+### Path Parameters
+
+<ParamField path="policyId" type="string" required>
+  Policy UUID
+</ParamField>
+
+<ParamField path="version" type="number" required>
+  Version number
+</ParamField>
+
+---
+
+## Migrate Policy
+
+Migrate policy to a specific version.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "targetVersion": 2,
+    "mode": "safe"
+  }' \
+  http://localhost:3000/api/v1/policies/123e4567-e89b-12d3-a456-426614174000/migrate
+```
+
+### Path Parameters
+
+<ParamField path="policyId" type="string" required>
+  Policy UUID
+</ParamField>
+
+### Request Body
+
+<ParamField body="targetVersion" type="number" required>
+  Target version number
+</ParamField>
+
+<ParamField body="mode" type="enum">
+  Migration mode: `safe` (default) or `force`
+</ParamField>
+
+---
+
+## Check Policy Compatibility
+
+Validate policy rules for compatibility.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "rules": [
+      {
+        "type": "spending_limit",
+        "maxLamportsPerTx": 10000000
+      }
+    ]
+  }' \
+  http://localhost:3000/api/v1/policies/compatibility-check
+```
+
+### Request Body
+
+<ParamField body="rules" type="array" required>
+  Array of policy rules to validate
+</ParamField>
+
+### Response
+
+```json
+{
+  "status": "success",
+  "data": {
+    "compatible": true,
+    "warnings": [],
+    "errors": []
+  }
+}
+```

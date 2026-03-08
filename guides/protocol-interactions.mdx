@@ -1,0 +1,629 @@
+---
+title: Protocol Interactions
+description: Execute DeFi operations across Jupiter, Marinade, Solend, Metaplex, and custom protocols
+---
+
+## Overview
+
+Agentic Wallet supports multiple Solana DeFi protocols through **protocol adapters**. Each adapter translates high-level intents into protocol-specific on-chain instructions.
+
+## Available Protocols
+
+List all available protocols:
+
+<CodeGroup>
+  ```bash CLI
+  npm run cli -- protocol list
+  ```
+
+  ```bash API
+  curl -H "x-api-key: dev-api-key" \
+    http://localhost:3000/api/v1/protocols
+  ```
+
+  ```typescript SDK
+  const protocols = await client.protocol.list();
+  protocols.forEach(p => {
+    console.log(`${p.name}: ${p.capabilities.join(', ')}`);
+  });
+  ```
+</CodeGroup>
+
+**Response:**
+```json
+{
+  "status": "success",
+  "data": [
+    {
+      "name": "system-program",
+      "capabilities": ["transfer_sol"]
+    },
+    {
+      "name": "spl-token",
+      "capabilities": ["transfer_spl", "create_mint", "mint_token"]
+    },
+    {
+      "name": "jupiter",
+      "capabilities": ["swap", "quote"]
+    },
+    {
+      "name": "marinade",
+      "capabilities": ["stake", "unstake"]
+    },
+    {
+      "name": "solend",
+      "capabilities": ["lend_supply", "lend_borrow"]
+    },
+    {
+      "name": "metaplex",
+      "capabilities": ["nft_mint"]
+    },
+    {
+      "name": "orca",
+      "capabilities": ["swap"]
+    },
+    {
+      "name": "raydium",
+      "capabilities": ["swap"]
+    },
+    {
+      "name": "escrow",
+      "capabilities": ["create_escrow", "accept_escrow", "release_escrow"]
+    }
+  ]
+}
+```
+
+## Token Swaps (Jupiter)
+
+### Get Quote
+
+<Tabs>
+  <Tab title="CLI">
+    ```bash
+    npm run cli -- protocol quote \
+      --protocol jupiter \
+      --input-mint So11111111111111111111111111111111111111112 \
+      --output-mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v \
+      --amount 1000000 \
+      --wallet <walletAddress> \
+      --slippage-bps 50
+    ```
+  </Tab>
+
+  <Tab title="API">
+    ```bash
+    curl -X POST http://localhost:3000/api/v1/defi/quote \
+      -H "Content-Type: application/json" \
+      -H "x-api-key: dev-api-key" \
+      -d '{
+        "protocol": "jupiter",
+        "inputMint": "So11111111111111111111111111111111111111112",
+        "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "1000000",
+        "wallet": "<walletAddress>",
+        "slippageBps": 50
+      }'
+    ```
+  </Tab>
+
+  <Tab title="SDK">
+    ```typescript
+    const quote = await client.protocol.quote({
+      protocol: 'jupiter',
+      inputMint: 'So11111111111111111111111111111111111111112', // SOL
+      outputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+      amount: '1000000',
+      wallet: walletAddress,
+      slippageBps: 50
+    });
+
+    console.log(`Expected output: ${quote.outputAmount}`);
+    console.log(`Price impact: ${quote.priceImpactPct}%`);
+    ```
+  </Tab>
+</Tabs>
+
+### Execute Swap
+
+<Steps>
+  <Step title="Get Quote (Optional)">
+    First, get a quote to see expected output:
+    ```bash
+    npm run cli -- protocol quote --protocol jupiter ...
+    ```
+  </Step>
+
+  <Step title="Create Swap Transaction">
+    <CodeGroup>
+      ```bash CLI
+      npm run cli -- tx create \
+        --wallet-id <walletId> \
+        --type swap \
+        --protocol jupiter \
+        --intent '{
+          "inputMint": "So11111111111111111111111111111111111111112",
+          "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+          "amount": "1000000",
+          "slippageBps": 50
+        }'
+      ```
+
+      ```typescript SDK
+      const tx = await client.transaction.create({
+        walletId: walletId,
+        type: 'swap',
+        protocol: 'jupiter',
+        intent: {
+          inputMint: 'So11111111111111111111111111111111111111112',
+          outputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+          amount: '1000000',
+          slippageBps: 50
+        }
+      });
+      ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Poll for Confirmation">
+    ```typescript
+    let result = await client.transaction.get(tx.id);
+    while (!['confirmed', 'failed'].includes(result.status)) {
+      await new Promise(r => setTimeout(r, 1000));
+      result = await client.transaction.get(tx.id);
+    }
+
+    console.log(`Swap ${result.status}: ${result.signature}`);
+    ```
+  </Step>
+</Steps>
+
+### Swap Intent Structure
+
+```json
+{
+  "inputMint": "<token-to-sell>",
+  "outputMint": "<token-to-buy>",
+  "amount": "<input-amount-in-base-units>",
+  "slippageBps": 50,
+  "minimumOut": "<optional-minimum-output>"
+}
+```
+
+<Note>
+  **Slippage**: `slippageBps` is in basis points (1% = 100 bps). Recommended: 50-100 bps for liquid pairs.
+</Note>
+
+## Staking (Marinade)
+
+### Stake SOL
+
+<Tabs>
+  <Tab title="CLI">
+    ```bash
+    npm run cli -- protocol stake \
+      --protocol marinade \
+      --wallet <walletAddress> \
+      --amount 1000000000
+    ```
+  </Tab>
+
+  <Tab title="API">
+    ```bash
+    curl -X POST http://localhost:3000/api/v1/defi/stake \
+      -H "Content-Type: application/json" \
+      -H "x-api-key: dev-api-key" \
+      -d '{
+        "protocol": "marinade",
+        "wallet": "<walletAddress>",
+        "amount": "1000000000"
+      }'
+    ```
+  </Tab>
+
+  <Tab title="Transaction">
+    ```typescript
+    const tx = await client.transaction.create({
+      walletId: walletId,
+      type: 'stake',
+      protocol: 'marinade',
+      intent: {
+        amount: '1000000000' // 1 SOL
+      }
+    });
+    ```
+  </Tab>
+</Tabs>
+
+### Unstake SOL
+
+```typescript
+const tx = await client.transaction.create({
+  walletId: walletId,
+  type: 'unstake',
+  protocol: 'marinade',
+  intent: {
+    amount: '1000000000' // 1 SOL worth of mSOL
+  }
+});
+```
+
+### Staking Intent Structure
+
+```json
+{
+  "amount": "<lamports-to-stake>",
+  "validator": "<optional-validator-vote-account>"
+}
+```
+
+## Lending (Solend)
+
+### Supply Assets
+
+<Tabs>
+  <Tab title="CLI">
+    ```bash
+    npm run cli -- protocol lend-supply \
+      --protocol solend \
+      --wallet <walletAddress> \
+      --mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v \
+      --amount 1000000
+    ```
+  </Tab>
+
+  <Tab title="Transaction">
+    ```typescript
+    const tx = await client.transaction.create({
+      walletId: walletId,
+      type: 'lend_supply',
+      protocol: 'solend',
+      intent: {
+        mint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v', // USDC
+        amount: '1000000' // 1 USDC
+      }
+    });
+    ```
+  </Tab>
+</Tabs>
+
+### Borrow Assets
+
+```typescript
+const tx = await client.transaction.create({
+  walletId: walletId,
+  type: 'lend_borrow',
+  protocol: 'solend',
+  intent: {
+    mint: 'So11111111111111111111111111111111111111112', // SOL
+    amount: '500000000' // 0.5 SOL
+  }
+});
+```
+
+<Warning>
+  **Lending Safety**: Ensure sufficient collateral before borrowing. Solend adapter includes safety checks but cannot prevent all liquidation scenarios.
+</Warning>
+
+## NFT Minting (Metaplex)
+
+### Mint NFT
+
+```typescript
+const tx = await client.transaction.create({
+  walletId: walletId,
+  type: 'nft_mint',
+  protocol: 'metaplex',
+  intent: {
+    name: 'My NFT',
+    symbol: 'MNFT',
+    uri: 'https://arweave.net/metadata.json',
+    sellerFeeBasisPoints: 500, // 5% royalty
+    creators: [
+      {
+        address: creatorPubkey,
+        verified: true,
+        share: 100
+      }
+    ]
+  }
+});
+```
+
+### NFT Intent Structure
+
+```json
+{
+  "name": "NFT Name",
+  "symbol": "SYMBOL",
+  "uri": "https://arweave.net/metadata-hash",
+  "sellerFeeBasisPoints": 500,
+  "creators": [
+    {
+      "address": "<creator-pubkey>",
+      "verified": true,
+      "share": 100
+    }
+  ]
+}
+```
+
+## Escrow Operations
+
+### Create Escrow
+
+```typescript
+const tx = await client.transaction.create({
+  walletId: walletId,
+  type: 'create_escrow',
+  protocol: 'escrow',
+  intent: {
+    escrowNumericId: '900001',
+    counterparty: recipientPubkey,
+    creator: creatorPubkey,
+    arbiter: arbiterPubkey,
+    feeRecipient: feePubkey,
+    amount: '10000000',
+    deadlineUnixSec: 4102444800,
+    terms: 'Payment for services rendered'
+  }
+});
+```
+
+### Accept Escrow
+
+```typescript
+const tx = await client.transaction.create({
+  walletId: walletId,
+  type: 'accept_escrow',
+  protocol: 'escrow',
+  intent: {
+    escrowNumericId: '900001',
+    creator: creatorPubkey
+  }
+});
+```
+
+### Release Escrow
+
+```typescript
+const tx = await client.transaction.create({
+  walletId: walletId,
+  type: 'release_escrow',
+  protocol: 'escrow',
+  intent: {
+    escrowNumericId: '900001',
+    creator: creatorPubkey,
+    counterparty: recipientPubkey,
+    feeRecipient: feePubkey
+  }
+});
+```
+
+### Query Escrows
+
+```bash
+npm run cli -- tx escrows --wallet-id <walletId>
+```
+
+<Note>
+  **Escrow Program**: Requires deployed Anchor program. Set `ESCROW_PROGRAM_ID` in environment. Deploy with `npm run escrow:deploy:devnet`.
+</Note>
+
+## Protocol Health Checks
+
+### Check All Protocols
+
+```bash
+curl -H "x-api-key: dev-api-key" \
+  http://localhost:3000/api/v1/protocols/health
+```
+
+### Check Specific Protocol
+
+```bash
+curl -H "x-api-key: dev-api-key" \
+  http://localhost:3000/api/v1/protocols/jupiter/health
+```
+
+**Response:**
+```json
+{
+  "protocol": "jupiter",
+  "ok": true,
+  "version": "6.0.0",
+  "capabilities": ["swap", "quote"],
+  "lastCheck": "2026-03-08T12:00:00.000Z"
+}
+```
+
+## Protocol Capabilities
+
+Get detailed capabilities for a protocol:
+
+```bash
+npm run cli -- protocol caps jupiter
+```
+
+**Response:**
+```json
+{
+  "protocol": "jupiter",
+  "version": "6.0.0",
+  "capabilities": [
+    {
+      "name": "swap",
+      "intentTypes": ["swap"],
+      "requiredFields": ["inputMint", "outputMint", "amount"],
+      "optionalFields": ["slippageBps", "minimumOut"]
+    },
+    {
+      "name": "quote",
+      "intentTypes": ["quote"],
+      "requiredFields": ["inputMint", "outputMint", "amount"],
+      "optionalFields": ["slippageBps"]
+    }
+  ]
+}
+```
+
+## Real Examples from Source
+
+### From README.md - Escrow Flow
+
+```bash
+# Create escrow
+npm run intent-runner -- --intent '{
+  "type":"create_escrow",
+  "walletId":"<creatorWalletId>",
+  "protocol":"escrow",
+  "intent":{
+    "escrowNumericId":"900001",
+    "counterparty":"<recipientPubkey>",
+    "creator":"<creatorPubkey>",
+    "arbiter":"<creatorPubkey>",
+    "feeRecipient":"<creatorPubkey>",
+    "amount":"10000000",
+    "deadlineUnixSec":4102444800,
+    "terms":"Devnet escrow test"
+  }
+}'
+
+# Accept escrow
+npm run intent-runner -- --intent '{
+  "type":"accept_escrow",
+  "walletId":"<recipientWalletId>",
+  "protocol":"escrow",
+  "intent":{
+    "escrowNumericId":"900001",
+    "creator":"<creatorPubkey>"
+  }
+}'
+
+# Release escrow
+npm run intent-runner -- --intent '{
+  "type":"release_escrow",
+  "walletId":"<creatorWalletId>",
+  "protocol":"escrow",
+  "intent":{
+    "escrowNumericId":"900001",
+    "creator":"<creatorPubkey>",
+    "counterparty":"<recipientPubkey>",
+    "feeRecipient":"<creatorPubkey>"
+  }
+}'
+```
+
+### From `scripts/devnet-protocol-matrix.ts`
+
+```typescript
+import { createAgenticWalletClient } from '@agentic-wallet/sdk';
+
+const client = createAgenticWalletClient('http://localhost:3000', {
+  apiKey: 'dev-api-key'
+});
+
+// List protocols
+const protocols = await client.protocol.list();
+
+// Find swap-capable protocols
+const swapProtocols = protocols.data.filter(p => 
+  p.capabilities.includes('swap')
+);
+
+// Try quote on each
+for (const protocol of swapProtocols) {
+  try {
+    const quote = await fetch('http://localhost:3000/api/v1/defi/quote', {
+      method: 'POST',
+      headers: {
+        'content-type': 'application/json',
+        'x-api-key': 'dev-api-key'
+      },
+      body: JSON.stringify({
+        protocol: protocol.name,
+        inputMint: 'So11111111111111111111111111111111111111112',
+        outputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+        amount: '1000000',
+        wallet: walletAddress,
+        slippageBps: 50
+      })
+    });
+    
+    if (quote.ok) {
+      console.log(`${protocol.name}: Quote successful`);
+    }
+  } catch (error) {
+    console.log(`${protocol.name}: Quote failed`);
+  }
+}
+```
+
+## Protocol Risk Configuration
+
+Set per-protocol risk parameters:
+
+```bash
+npm run cli -- risk protocol-set jupiter --input '{
+  "maxSlippageBps": 75,
+  "maxNotionalLamports": 100000000,
+  "requireOracleForSwap": true,
+  "gaslessEligible": false
+}'
+```
+
+### Risk Parameters
+
+| Parameter | Description |
+|-----------|-------------|
+| `maxSlippageBps` | Maximum slippage allowed |
+| `maxPoolConcentrationBps` | Max pool concentration |
+| `allowedPools` | Whitelist of pool addresses |
+| `allowedPrograms` | Whitelist of program IDs |
+| `oracleDeviationBps` | Max price deviation from oracle |
+| `requireOracleForSwap` | Require oracle price check |
+| `maxQuoteAgeSeconds` | Max quote age before refresh |
+| `deltaVarianceBpsThreshold` | Delta guard variance threshold |
+| `gaslessEligible` | Allow gasless transactions |
+
+## Query DeFi Positions
+
+Get all active DeFi positions:
+
+```bash
+npm run cli -- tx positions --wallet-id <walletId>
+```
+
+**Response:**
+```json
+{
+  "walletId": "wallet-uuid",
+  "positions": [
+    {
+      "protocol": "marinade",
+      "type": "stake",
+      "amount": "1000000000",
+      "token": "mSOL",
+      "value": "1050000000"
+    },
+    {
+      "protocol": "solend",
+      "type": "lend_supply",
+      "amount": "5000000",
+      "token": "USDC",
+      "apy": "8.5%"
+    }
+  ]
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Setting Policies" icon="shield" href="/guides/setting-policies">
+    Add risk controls to protocol interactions
+  </Card>
+  <Card title="Managing Agents" icon="robot" href="/guides/managing-agents">
+    Create autonomous agents that interact with protocols
+  </Card>
+</CardGroup>

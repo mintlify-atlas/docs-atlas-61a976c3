@@ -1,0 +1,558 @@
+---
+title: 'Protocols'
+description: 'Protocol adapter capabilities and DeFi operations'
+icon: 'network-wired'
+---
+
+## List Protocols
+
+List all available protocol adapters.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/protocols
+```
+
+### Response
+
+```json
+{
+  "status": "success",
+  "data": {
+    "protocols": [
+      {
+        "protocol": "system-program",
+        "version": "1.0.0",
+        "capabilities": ["transfer_sol", "create_account"],
+        "programIds": ["11111111111111111111111111111111"]
+      },
+      {
+        "protocol": "jupiter",
+        "version": "1.0.0",
+        "capabilities": ["swap", "quote"],
+        "programIds": ["JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"]
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Get Protocol Capabilities
+
+Retrieve capabilities for a specific protocol.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/protocols/jupiter/capabilities
+```
+
+### Path Parameters
+
+<ParamField path="protocol" type="string" required>
+  Protocol name: `system-program`, `spl-token`, `jupiter`, `marinade`, `solend`, `metaplex`, `orca`, `raydium`, `escrow`
+</ParamField>
+
+### Response
+
+<ResponseField name="protocol" type="string" required>
+  Protocol name
+</ResponseField>
+
+<ResponseField name="version" type="string" required>
+  Protocol adapter version
+</ResponseField>
+
+<ResponseField name="capabilities" type="array" required>
+  Array of supported operations
+</ResponseField>
+
+<ResponseField name="programIds" type="array" required>
+  Array of on-chain program IDs
+</ResponseField>
+
+---
+
+## Get Protocol Version
+
+Get protocol adapter version.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/protocols/jupiter/version
+```
+
+---
+
+## Protocol Health
+
+Check health of all protocol adapters.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/protocols/health
+```
+
+### Get Specific Protocol Health
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/protocols/escrow/health
+```
+
+### Response
+
+```json
+{
+  "status": "success",
+  "data": {
+    "protocol": "escrow",
+    "ok": true,
+    "configured": true,
+    "deployed": true,
+    "programId": "EscrowProgramId1111111111111111111111111111"
+  }
+}
+```
+
+---
+
+## Compatibility Check
+
+Check if a protocol supports a specific intent.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "swap",
+    "intent": {
+      "inputMint": "So11111111111111111111111111111111111111112",
+      "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"
+    }
+  }' \
+  http://localhost:3000/api/v1/protocols/jupiter/compatibility-check
+```
+
+---
+
+## Migrate Intent
+
+Migrate an intent from one protocol version to another.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "intent": {...},
+    "targetVersion": "2.0.0"
+  }' \
+  http://localhost:3000/api/v1/protocols/jupiter/migrate-intent
+```
+
+---
+
+## DeFi Operations
+
+### Get Quote
+
+Get a swap quote from a DEX protocol.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "protocol": "jupiter",
+    "inputMint": "So11111111111111111111111111111111111111112",
+    "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "amount": "1000000",
+    "wallet": "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy",
+    "slippageBps": 50
+  }' \
+  http://localhost:3000/api/v1/defi/quote
+```
+
+#### Request Body
+
+<ParamField body="protocol" type="string" required>
+  DEX protocol: `jupiter`, `orca`, `raydium`
+</ParamField>
+
+<ParamField body="inputMint" type="string" required>
+  Input token mint address
+</ParamField>
+
+<ParamField body="outputMint" type="string" required>
+  Output token mint address
+</ParamField>
+
+<ParamField body="amount" type="string" required>
+  Input amount (in token base units)
+</ParamField>
+
+<ParamField body="wallet" type="string" required>
+  Wallet public key
+</ParamField>
+
+<ParamField body="slippageBps" type="number">
+  Slippage tolerance in basis points (default: 50)
+</ParamField>
+
+---
+
+### Swap
+
+Execute a token swap.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "protocol": "jupiter",
+    "inputMint": "So11111111111111111111111111111111111111112",
+    "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "amount": "1000000",
+    "wallet": "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy",
+    "slippageBps": 50
+  }' \
+  http://localhost:3000/api/v1/defi/swap
+```
+
+<Note>
+  This is a convenience endpoint. For full transaction control, use `POST /api/v1/transactions` with `type: "swap"`.
+</Note>
+
+---
+
+### Stake
+
+Stake SOL with a staking protocol.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "protocol": "marinade",
+    "wallet": "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy",
+    "amount": "1000000000",
+    "validator": "optional-validator-address"
+  }' \
+  http://localhost:3000/api/v1/defi/stake
+```
+
+#### Request Body
+
+<ParamField body="protocol" type="string" required>
+  Staking protocol: `marinade`, `solend`
+</ParamField>
+
+<ParamField body="wallet" type="string" required>
+  Wallet public key
+</ParamField>
+
+<ParamField body="amount" type="string" required>
+  Amount to stake in lamports
+</ParamField>
+
+<ParamField body="validator" type="string">
+  Specific validator address (optional)
+</ParamField>
+
+---
+
+### Unstake
+
+Unstake SOL from a staking protocol.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "protocol": "marinade",
+    "wallet": "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy",
+    "amount": "1000000000"
+  }' \
+  http://localhost:3000/api/v1/defi/unstake
+```
+
+---
+
+### Lend - Supply
+
+Supply tokens to a lending protocol.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "protocol": "solend",
+    "wallet": "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy",
+    "mint": "So11111111111111111111111111111111111111112",
+    "amount": "1000000000"
+  }' \
+  http://localhost:3000/api/v1/defi/lend/supply
+```
+
+#### Request Body
+
+<ParamField body="protocol" type="string" required>
+  Lending protocol: `solend`
+</ParamField>
+
+<ParamField body="wallet" type="string" required>
+  Wallet public key
+</ParamField>
+
+<ParamField body="mint" type="string" required>
+  Token mint address to supply
+</ParamField>
+
+<ParamField body="amount" type="string" required>
+  Amount to supply (in token base units)
+</ParamField>
+
+---
+
+### Lend - Borrow
+
+Borrow tokens from a lending protocol.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "protocol": "solend",
+    "wallet": "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy",
+    "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+    "amount": "1000000"
+  }' \
+  http://localhost:3000/api/v1/defi/lend/borrow
+```
+
+---
+
+## Escrow Operations
+
+### Create Escrow
+
+Create a new escrow account.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "escrowNumericId": "900001",
+    "counterparty": "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy",
+    "creator": "8yMLvVhYW0YrHZaN4Kx9xWIHK7S5tO3hqW0nQ4mM6fYz",
+    "arbiter": "9zNMvWhZW1ZsIZbO5Ly0yXJHL8T6tP4irX1oR5nN7gZa",
+    "feeRecipient": "AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVv",
+    "amount": "10000000",
+    "deadlineUnixSec": 4102444800,
+    "terms": "Payment for services rendered"
+  }' \
+  http://localhost:3000/api/v1/escrow/create
+```
+
+#### Request Body
+
+<ParamField body="escrowNumericId" type="string" required>
+  Unique numeric escrow identifier
+</ParamField>
+
+<ParamField body="counterparty" type="string" required>
+  Recipient wallet address
+</ParamField>
+
+<ParamField body="creator" type="string" required>
+  Creator wallet address
+</ParamField>
+
+<ParamField body="arbiter" type="string" required>
+  Arbiter wallet address for dispute resolution
+</ParamField>
+
+<ParamField body="feeRecipient" type="string" required>
+  Fee recipient wallet address
+</ParamField>
+
+<ParamField body="amount" type="string" required>
+  Escrow amount in lamports
+</ParamField>
+
+<ParamField body="deadlineUnixSec" type="number" required>
+  Escrow deadline (Unix timestamp)
+</ParamField>
+
+<ParamField body="terms" type="string">
+  Escrow terms description
+</ParamField>
+
+---
+
+### Accept Escrow
+
+Accept an existing escrow.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "escrowNumericId": "900001",
+    "creator": "8yMLvVhYW0YrHZaN4Kx9xWIHK7S5tO3hqW0nQ4mM6fYz"
+  }' \
+  http://localhost:3000/api/v1/escrow/900001/accept
+```
+
+### Path Parameters
+
+<ParamField path="id" type="string" required>
+  Escrow numeric ID
+</ParamField>
+
+---
+
+### Release Escrow
+
+Release funds to counterparty.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "escrowNumericId": "900001",
+    "creator": "8yMLvVhYW0YrHZaN4Kx9xWIHK7S5tO3hqW0nQ4mM6fYz",
+    "counterparty": "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy",
+    "feeRecipient": "AaBbCcDdEeFfGgHhIiJjKkLlMmNnOoPpQqRrSsTtUuVv"
+  }' \
+  http://localhost:3000/api/v1/escrow/900001/release
+```
+
+---
+
+### Refund Escrow
+
+Refund funds to creator.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "escrowNumericId": "900001",
+    "creator": "8yMLvVhYW0YrHZaN4Kx9xWIHK7S5tO3hqW0nQ4mM6fYz"
+  }' \
+  http://localhost:3000/api/v1/escrow/900001/refund
+```
+
+---
+
+### Dispute Escrow
+
+Raise a dispute.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "escrowNumericId": "900001",
+    "creator": "8yMLvVhYW0YrHZaN4Kx9xWIHK7S5tO3hqW0nQ4mM6fYz"
+  }' \
+  http://localhost:3000/api/v1/escrow/900001/dispute
+```
+
+---
+
+### Resolve Dispute
+
+Arbiter resolves a dispute.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "escrowNumericId": "900001",
+    "creator": "8yMLvVhYW0YrHZaN4Kx9xWIHK7S5tO3hqW0nQ4mM6fYz",
+    "winnerIsCreator": false
+  }' \
+  http://localhost:3000/api/v1/escrow/900001/resolve
+```
+
+---
+
+## Supported Protocols
+
+<Tabs>
+  <Tab title="System Program">
+    **Protocol:** `system-program`
+    
+    **Capabilities:**
+    - `transfer_sol` - Transfer SOL between accounts
+    - `create_account` - Create new accounts
+    
+    **Program ID:** `11111111111111111111111111111111`
+  </Tab>
+  <Tab title="SPL Token">
+    **Protocol:** `spl-token`
+    
+    **Capabilities:**
+    - `transfer_spl` - Transfer SPL tokens
+    - `create_mint` - Create new token mint
+    - `mint_token` - Mint tokens to account
+    
+    **Program ID:** `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`
+  </Tab>
+  <Tab title="Jupiter">
+    **Protocol:** `jupiter`
+    
+    **Capabilities:**
+    - `swap` - Token swaps with best price routing
+    - `quote` - Get swap quotes
+    
+    **Program ID:** `JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4`
+  </Tab>
+  <Tab title="Marinade">
+    **Protocol:** `marinade`
+    
+    **Capabilities:**
+    - `stake` - Stake SOL for mSOL
+    - `unstake` - Unstake mSOL for SOL
+    
+    **Program ID:** `MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD`
+  </Tab>
+  <Tab title="Solend">
+    **Protocol:** `solend`
+    
+    **Capabilities:**
+    - `lend_supply` - Supply tokens to earn interest
+    - `lend_borrow` - Borrow tokens against collateral
+    
+    **Program ID:** `So1endDq2YkqhipRh3WViPa8hdiSpxWy6z3Z6tMCpAo`
+  </Tab>
+  <Tab title="Escrow">
+    **Protocol:** `escrow`
+    
+    **Capabilities:**
+    - `create_escrow` - Create escrow account
+    - `accept_escrow` - Accept escrow terms
+    - `release_escrow` - Release funds
+    - `refund_escrow` - Refund to creator
+    - `dispute_escrow` - Raise dispute
+    - `resolve_dispute` - Arbiter resolution
+    
+    **Program ID:** Configured via `ESCROW_PROGRAM_ID`
+  </Tab>
+</Tabs>

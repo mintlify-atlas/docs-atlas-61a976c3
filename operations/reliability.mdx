@@ -1,0 +1,478 @@
+---
+title: 'Reliability'
+description: 'RPC failover, durable queues, retry semantics, priority fee tuning, and delta guard checks'
+---
+
+## RPC Pool Failover
+
+The transaction engine uses an intelligent RPC pool with automatic health scoring and failover.
+
+### Configuration
+
+Configure multiple RPC endpoints for high availability:
+
+```bash .env
+# Primary RPC endpoint
+SOLANA_RPC_URL=https://api.devnet.solana.com
+
+# Pool of endpoints (comma-separated)
+SOLANA_RPC_POOL_URLS=https://api.devnet.solana.com,https://rpc.ankr.com/solana_devnet,https://devnet.helius-rpc.com
+
+# Health probe interval in milliseconds
+SOLANA_RPC_HEALTH_PROBE_MS=15000
+```
+
+### Health Scoring Algorithm
+
+Each endpoint maintains a dynamic health score based on:
+
+- **Success rate** - Successful requests increase score
+- **Latency** - High latency reduces score
+- **Failure streaks** - Consecutive failures penalize score
+- **Recovery** - Endpoints can recover score over time
+
+<Accordion title="Health Score Formula">
+  **Initial Score:** `1.0`
+  
+  **On Success:**
+  ```
+  score = max(0.05, min(1.0, score + 0.06 - latencyPenalty(avgLatencyMs)))
+  avgLatencyMs = avgLatencyMs * 0.7 + currentLatency * 0.3
+  failStreak = 0
+  ```
+  
+  **On Failure:**
+  ```
+  score = max(0.05, score * 0.7)
+  failStreak += 1
+  ```
+  
+  **Latency Penalties:**
+  - ≤ 200ms: `0.00`
+  - 201-500ms: `0.04`
+  - 501-1000ms: `0.08`
+  - > 1000ms: `0.12`
+</Accordion>
+
+### Failover Behavior
+
+<Steps>
+  <Step title="Sort by Score">
+    Endpoints are sorted by health score (descending), then by average latency (ascending).
+  </Step>
+  
+  <Step title="Attempt Primary">
+    The highest-scored endpoint is tried first for each operation.
+  </Step>
+  
+  <Step title="Cascade on Failure">
+    If the primary fails, the next endpoint in the sorted list is tried automatically.
+  </Step>
+  
+  <Step title="Update Health">
+    Success or failure updates the endpoint's health score for future requests.
+  </Step>
+</Steps>
+
+### Monitor Pool Status
+
+Query the current health of all RPC endpoints:
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/rpc/pool/status
+```
+
+Response:
+```json
+{
+  "endpoints": [
+    {
+      "url": "https://api.devnet.solana.com",
+      "score": 0.95,
+      "successes": 142,
+      "failures": 3,
+      "avgLatencyMs": 230,
+      "failStreak": 0,
+      "lastCheckedAt": "2026-03-08T10:30:00.000Z"
+    },
+    {
+      "url": "https://rpc.ankr.com/solana_devnet",
+      "score": 0.88,
+      "successes": 98,
+      "failures": 8,
+      "avgLatencyMs": 420,
+      "failStreak": 1,
+      "lastCheckedAt": "2026-03-08T10:29:45.000Z",
+      "lastError": "Connection timeout"
+    }
+  ]
+}
+```
+
+<Note>
+  The pool continuously probes all endpoints in the background at the configured interval to maintain fresh health scores.
+</Note>
+
+## Durable Outbox Queue
+
+The transaction engine uses a SQLite-backed outbox pattern for reliable transaction processing.
+
+### Architecture
+
+- **Persistent Storage** - Jobs survive process restarts
+- **Lease-based Claiming** - Workers claim jobs with time-bound leases
+- **Automatic Retry** - Failed jobs re-enter the queue
+- **Deduplication** - Prevents duplicate pending jobs for the same transaction
+
+### Outbox Actions
+
+- `execute` - Process a new transaction request
+- `retry` - Retry a failed transaction
+- `approve` - Process an approval gate decision
+
+### Job States
+
+<CodeGroup>
+```typescript Lifecycle
+type OutboxStatus = 
+  | 'pending'      // Queued, waiting for worker
+  | 'processing'   // Worker has active lease
+  | 'done'         // Successfully completed
+  | 'failed'       // Exceeded max retry attempts
+```
+
+```typescript Job Structure
+interface OutboxJob {
+  id: string;
+  txId: string;
+  action: OutboxAction;
+  status: OutboxStatus;
+  createdAt: string;
+  updatedAt: string;
+  attempts: number;
+  leaseId?: string;
+  leaseExpiresAt?: string;
+  lastError?: string;
+  payload?: OutboxPayload;
+}
+```
+</CodeGroup>
+
+### Configuration
+
+```bash .env
+# Lease duration - how long a worker can hold a job
+TX_OUTBOX_LEASE_MS=30000
+
+# Poll interval - how often worker checks for new jobs
+TX_OUTBOX_POLL_MS=2000
+
+# Max attempts before marking job as permanently failed
+TX_OUTBOX_MAX_ATTEMPTS=6
+```
+
+### Lease and Retry Semantics
+
+<Steps>
+  <Step title="Claim Job">
+    Worker claims the oldest `pending` job or a `processing` job with expired lease.
+    
+    ```sql
+    WHERE status = 'pending'
+       OR (status = 'processing' AND lease_expires_at <= NOW())
+    ORDER BY created_at ASC
+    LIMIT 1
+    ```
+  </Step>
+  
+  <Step title="Process with Lease">
+    Job moves to `processing` with a unique `leaseId` and expiration timestamp.
+    
+    ```typescript
+    attempts += 1
+    lease_expires_at = NOW() + TX_OUTBOX_LEASE_MS
+    ```
+  </Step>
+  
+  <Step title="Complete or Fail">
+    Worker marks job as `done` or `failed`.
+    
+    - **Success:** `status = 'done'`, lease cleared
+    - **Retryable Failure:** `status = 'pending'` if `attempts < TX_OUTBOX_MAX_ATTEMPTS`
+    - **Permanent Failure:** `status = 'failed'` if max attempts exceeded
+  </Step>
+  
+  <Step title="Automatic Recovery">
+    If worker crashes, expired leases allow job to be reclaimed by another worker.
+  </Step>
+</Steps>
+
+<Warning>
+  **Lease Expiration:** Set `TX_OUTBOX_LEASE_MS` longer than your worst-case transaction confirmation time to avoid premature lease expiration.
+</Warning>
+
+### Monitor Outbox Status
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/outbox/stats
+```
+
+Response:
+```json
+{
+  "pending": 3,
+  "processing": 2,
+  "failed": 0,
+  "done": 145
+}
+```
+
+## Adaptive Priority Fee Tuning
+
+The execution tuner automatically calculates optimal priority fees based on recent network activity.
+
+### Configuration
+
+```bash .env
+# Minimum priority fee (microlamports per compute unit)
+SOLANA_PRIORITY_FEE_MIN_MICROLAMPORTS=2000
+
+# Maximum priority fee (microlamports per compute unit)
+SOLANA_PRIORITY_FEE_MAX_MICROLAMPORTS=200000
+
+# Percentile of recent fees to target (1-99)
+SOLANA_PRIORITY_FEE_PERCENTILE=75
+
+# Multiplier applied to percentile fee (basis points)
+# 1150 bps = 1.15x boost
+SOLANA_PRIORITY_FEE_MULTIPLIER_BPS=1150
+```
+
+### Fee Calculation Algorithm
+
+<Steps>
+  <Step title="Collect Recent Fees">
+    Gather recent priority fees from the RPC endpoint's recent blocks.
+  </Step>
+  
+  <Step title="Calculate Percentile">
+    Compute the configured percentile (e.g., 75th percentile).
+    
+    ```typescript
+    const sortedFees = recentFees.filter(f => f >= 0).sort((a, b) => a - b)
+    const index = Math.floor((percentile / 100) * (sortedFees.length - 1))
+    const percentileFee = sortedFees[index]
+    ```
+  </Step>
+  
+  <Step title="Apply Multiplier">
+    Boost the percentile fee by the configured multiplier.
+    
+    ```typescript
+    const multiplier = PRIORITY_FEE_MULTIPLIER_BPS / 10000
+    const boostedFee = Math.floor(percentileFee * multiplier)
+    ```
+  </Step>
+  
+  <Step title="Clamp to Bounds">
+    Ensure the final fee is within min/max bounds.
+    
+    ```typescript
+    const finalFee = clamp(
+      boostedFee > 0 ? boostedFee : minFee,
+      minFee,
+      maxFee
+    )
+    ```
+  </Step>
+</Steps>
+
+### Compute Unit Estimation
+
+The tuner also calculates compute unit limits based on transaction type:
+
+```typescript
+const computeByType: Record<TransactionType, number> = {
+  transfer_sol: 120_000,
+  transfer_spl: 180_000,
+  swap: 380_000,
+  stake: 240_000,
+  unstake: 240_000,
+  lend_supply: 320_000,
+  lend_borrow: 350_000,
+  create_escrow: 320_000,
+  accept_escrow: 280_000,
+  release_escrow: 260_000,
+  // ...
+}
+
+// Add buffer for additional instructions
+const instructionBuffer = max(0, instructionCount - 1) * 15_000
+const computeUnitLimit = clamp(baseUnits + instructionBuffer, 100_000, 1_200_000)
+```
+
+<Note>
+  Compute budgets are automatically injected as the first instructions in every transaction.
+</Note>
+
+## Delta Guard Checks
+
+Delta guard validates that observed balance changes match expected deltas to detect simulation drift or unexpected fees.
+
+### Configuration
+
+```bash .env
+# Absolute tolerance in lamports for small variances
+DELTA_GUARD_ABSOLUTE_TOLERANCE_LAMPORTS=10000
+```
+
+### Expected Delta Calculation
+
+```typescript
+const expectedLamportsDelta = (type: string, intent: Record<string, unknown>): number | null => {
+  const amount = Number(intent['lamports'] ?? intent['amountLamports'] ?? intent['amount'] ?? 0)
+  
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return null // Cannot compute delta
+  }
+  
+  // Outflows (negative delta)
+  if (
+    type === 'transfer_sol' ||
+    type === 'stake' ||
+    type === 'lend_supply' ||
+    type === 'create_escrow'
+  ) {
+    return -amount
+  }
+  
+  // Inflows (positive delta)
+  if (
+    type === 'unstake' ||
+    type === 'release_escrow' ||
+    type === 'refund_escrow'
+  ) {
+    return amount
+  }
+  
+  return null // No delta check for this type
+}
+```
+
+### Variance Evaluation
+
+<Steps>
+  <Step title="Compare Deltas">
+    Calculate the absolute difference between expected and observed deltas.
+    
+    ```typescript
+    const absoluteDelta = Math.abs(observed - expected)
+    ```
+  </Step>
+  
+  <Step title="Check Absolute Tolerance">
+    If within the configured tolerance, delta guard passes.
+    
+    ```typescript
+    if (absoluteDelta <= DELTA_GUARD_ABSOLUTE_TOLERANCE_LAMPORTS) {
+      return { ok: true, reason: 'within absolute tolerance' }
+    }
+    ```
+  </Step>
+  
+  <Step title="Calculate Variance BPS">
+    Compute variance in basis points.
+    
+    ```typescript
+    const denom = Math.max(1, Math.abs(expected))
+    const varianceBps = Math.round((absoluteDelta / denom) * 10000)
+    ```
+  </Step>
+  
+  <Step title="Check Threshold">
+    Compare variance to the configured threshold (typically 200-500 bps).
+    
+    ```typescript
+    const ok = varianceBps <= thresholdBps
+    ```
+  </Step>
+</Steps>
+
+### Delta Guard Result
+
+```typescript
+interface DeltaGuardResult {
+  ok: boolean;
+  expectedLamportsDelta: number | null;
+  observedLamportsDelta: number | null;
+  varianceBps: number | null;
+  reason?: string;
+}
+```
+
+<Warning>
+  **Delta Guard Failures** indicate a mismatch between simulation and execution. This could be due to:
+  - Unexpected transaction fees
+  - Rent changes
+  - Protocol fee variations
+  - Simulation drift (different blockhash/slot)
+  
+  Investigate failed transactions to determine if the variance is acceptable.
+</Warning>
+
+## Restart Recovery
+
+The outbox queue automatically drains pending work on service restart.
+
+### Recovery Flow
+
+<Steps>
+  <Step title="Load Persistent State">
+    On startup, the transaction engine loads the SQLite database with all pending and processing jobs.
+  </Step>
+  
+  <Step title="Reclaim Expired Leases">
+    Jobs in `processing` state with expired leases return to `pending`.
+  </Step>
+  
+  <Step title="Resume Processing">
+    The outbox worker starts polling and claiming jobs from the queue.
+  </Step>
+  
+  <Step title="Process Backlog">
+    All pending jobs are processed in FIFO order (oldest first).
+  </Step>
+</Steps>
+
+<Note>
+  No manual intervention is required after a restart. The system automatically recovers and continues processing.
+</Note>
+
+## Database Migration
+
+The system includes automatic migration from legacy JSON snapshots to SQLite.
+
+### Migration Behavior
+
+- **Automatic Detection** - On first startup, checks for legacy snapshot file
+- **One-time Import** - Migrates jobs if SQLite database is empty
+- **Preserves History** - All job states, attempts, and metadata are preserved
+- **Idempotent** - Safe to restart during migration
+
+```typescript
+if (existsSync(legacySnapshotFile) && dbRowCount === 0) {
+  const snapshot = JSON.parse(readFileSync(legacySnapshotFile))
+  
+  db.transaction(() => {
+    for (const job of snapshot.jobs) {
+      db.insert(job) // INSERT OR IGNORE for idempotency
+    }
+  })
+}
+```
+
+<Note>
+  After successful migration, you can safely delete the legacy JSON snapshot file.
+</Note>

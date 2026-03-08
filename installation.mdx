@@ -1,0 +1,423 @@
+---
+title: 'Installation'
+description: 'Complete installation guide for Agentic Wallet development and production environments'
+---
+
+This guide covers installing Agentic Wallet for local development, testing, and production deployment.
+
+## Prerequisites
+
+<CardGroup cols={2}>
+  <Card title="Node.js" icon="node-js">
+    **Version:** >= 20.x
+    
+    ```bash
+    node --version
+    ```
+  </Card>
+  <Card title="npm" icon="npm">
+    **Version:** >= 10.x
+    
+    ```bash
+    npm --version
+    ```
+  </Card>
+  <Card title="Solana CLI" icon="wallet">
+    **Version:** >= 1.18.x
+    
+    Required for devnet funding and program deployment
+    
+    ```bash
+    solana --version
+    ```
+  </Card>
+  <Card title="Anchor CLI" icon="anchor">
+    **Version:** >= 0.31.x
+    
+    Required for escrow program build/deploy
+    
+    ```bash
+    anchor --version
+    ```
+  </Card>
+</CardGroup>
+
+### Installing Prerequisites
+
+<AccordionGroup>
+  <Accordion title="Install Node.js and npm">
+    <Tabs>
+      <Tab title="macOS (Homebrew)">
+        ```bash
+        brew install node@20
+        ```
+      </Tab>
+      <Tab title="Linux (nvm)">
+        ```bash
+        curl -o- https://raw.githubusercontent.com/nvm-sh/nvm/v0.39.0/install.sh | bash
+        nvm install 20
+        nvm use 20
+        ```
+      </Tab>
+      <Tab title="Windows (nvm-windows)">
+        Download from [nvm-windows releases](https://github.com/coreybutler/nvm-windows/releases), then:
+        
+        ```powershell
+        nvm install 20
+        nvm use 20
+        ```
+      </Tab>
+    </Tabs>
+  </Accordion>
+
+  <Accordion title="Install Solana CLI">
+    ```bash
+    sh -c "$(curl -sSfL https://release.solana.com/stable/install)"
+    ```
+
+    Add to your PATH:
+
+    ```bash
+    export PATH="$HOME/.local/share/solana/install/active_release/bin:$PATH"
+    ```
+
+    Verify installation:
+
+    ```bash
+    solana --version
+    ```
+
+    Configure for devnet:
+
+    ```bash
+    solana config set --url devnet
+    ```
+
+    <Note>
+    See [Solana CLI documentation](https://docs.solana.com/cli/install-solana-cli-tools) for more details.
+    </Note>
+  </Accordion>
+
+  <Accordion title="Install Anchor CLI">
+    Anchor is required for building and deploying the escrow program.
+
+    <Tabs>
+      <Tab title="Using avm (recommended)">
+        Install Anchor Version Manager:
+
+        ```bash
+        cargo install --git https://github.com/coral-xyz/anchor avm --locked --force
+        ```
+
+        Install Anchor:
+
+        ```bash
+        avm install 0.31.0
+        avm use 0.31.0
+        ```
+      </Tab>
+      <Tab title="From source">
+        ```bash
+        cargo install --git https://github.com/coral-xyz/anchor --tag v0.31.0 anchor-cli --locked
+        ```
+      </Tab>
+    </Tabs>
+
+    Verify installation:
+
+    ```bash
+    anchor --version
+    ```
+
+    <Note>
+    See [Anchor documentation](https://www.anchor-lang.com/docs/installation) for troubleshooting.
+    </Note>
+  </Accordion>
+</AccordionGroup>
+
+## Installation Steps
+
+<Steps>
+  <Step title="Clone or Download Repository">
+    If you have the repository locally, navigate to it:
+
+    ```bash
+    cd /path/to/agentic-wallet
+    ```
+
+    Or clone from your source:
+
+    ```bash
+    git clone <your-repository-url>
+    cd agentic-wallet
+    ```
+  </Step>
+
+  <Step title="Install Dependencies">
+    Install all workspace dependencies:
+
+    ```bash
+    npm install
+    ```
+
+    This installs dependencies for:
+    - 2 applications (`apps/*`): API Gateway, CLI
+    - 7 services (`services/*`): wallet-engine, policy-engine, agent-runtime, protocol-adapters, transaction-engine, audit-observability, mcp-server
+    - 3 packages (`packages/*`): common, sdk, observability
+
+    <Note>
+    The post-install script runs automatically to patch RPC WebSocket compatibility.
+    </Note>
+  </Step>
+
+  <Step title="Verify Installation">
+    Run quality gates to ensure everything is installed correctly:
+
+    ```bash
+    npm run typecheck
+    npm run lint
+    npm run test
+    npm run build
+    ```
+
+    All commands should complete successfully.
+
+    <Warning>
+    If `npm run build` fails, check that all dependencies installed correctly and that you have sufficient disk space.
+    </Warning>
+  </Step>
+</Steps>
+
+## Post-Installation
+
+### Build All Packages
+
+Build all services and packages:
+
+```bash
+npm run build
+```
+
+This compiles TypeScript for:
+- All 7 microservices
+- SDK and shared packages
+- CLI application
+
+### Build Escrow Program (Optional)
+
+If you plan to use escrow functionality, build the Anchor program:
+
+```bash
+npm run escrow:build
+```
+
+This command:
+1. Syncs the program ID from the deploy keypair
+2. Builds the Anchor program
+3. Generates IDL and type definitions
+
+<Note>
+You only need to build the escrow program if you plan to deploy it or modify escrow functionality.
+</Note>
+
+## Verification
+
+### System Health Check
+
+Run the doctor command to verify your installation:
+
+```bash
+npm run cli -- doctor
+```
+
+Expected output:
+
+```
+✓ Node.js version: 20.x.x
+✓ npm version: 10.x.x
+✓ Solana CLI: 1.18.x
+✓ Anchor CLI: 0.31.x
+✓ All services built
+✓ Environment configured
+```
+
+### Service Startup Test
+
+Verify all services can start:
+
+```bash
+# Load environment
+set -a; source .env.example; set +a
+
+# Start services
+npm run dev
+```
+
+You should see 8 services listening:
+
+```
+[gateway] API Gateway listening on port 3000
+[wallet] Wallet Engine listening on port 3002
+[policy] Policy Engine listening on port 3003
+[agent] Agent Runtime listening on port 3004
+[protocol] Protocol Adapters listening on port 3005
+[tx] Transaction Engine listening on port 3006
+[audit] Audit & Observability listening on port 3007
+[mcp] MCP Server listening on port 3008
+```
+
+Press `Ctrl+C` to stop services.
+
+## Repository Structure
+
+After installation, your repository should have this structure:
+
+```
+agentic-wallet/
+├── apps/
+│   ├── api-gateway/          # REST API gateway
+│   └── cli/                  # Command-line interface
+├── services/
+│   ├── wallet-engine/        # Wallet custody & signing
+│   ├── policy-engine/        # Policy evaluation
+│   ├── agent-runtime/        # Agent lifecycle & execution
+│   ├── protocol-adapters/    # Protocol integrations
+│   ├── transaction-engine/   # Transaction pipeline
+│   ├── audit-observability/  # Audit logs & metrics
+│   └── mcp-server/           # MCP tools interface
+├── packages/
+│   ├── common/               # Shared types & schemas
+│   ├── sdk/                  # TypeScript SDK
+│   └── observability/        # Observability utilities
+├── programs/
+│   └── escrow/               # Anchor escrow program
+├── scripts/
+│   ├── intent-runner.ts      # Intent execution script
+│   ├── wallets.ts            # Wallet management script
+│   ├── devnet-smoke.ts       # Smoke tests
+│   └── ...                   # Other utility scripts
+├── docs/                     # Documentation
+├── .env.example              # Example environment config
+├── package.json              # Root package manifest
+└── README.md                 # Project overview
+```
+
+## Service Ports
+
+After installation, these ports will be used by default:
+
+| Service | Port | Description |
+|---------|------|-------------|
+| API Gateway | 3000 | Main entry point for all requests |
+| Wallet Engine | 3002 | Wallet creation, signing, balances |
+| Policy Engine | 3003 | Policy evaluation and approval gates |
+| Agent Runtime | 4004 | Agent lifecycle and autonomous execution |
+| Protocol Adapters | 3005 | Protocol-specific transaction builders |
+| Transaction Engine | 3006 | Transaction pipeline and confirmation |
+| Audit & Observability | 3007 | Audit events and metrics |
+| MCP Server | 3008 | MCP-compatible tool endpoints |
+
+<Note>
+All ports are configurable via environment variables. See the [Configuration](/configuration) guide.
+</Note>
+
+## Data Directories
+
+By default, services store data in their local directories:
+
+```
+services/wallet-engine/data/          # Encrypted wallet keys
+services/policy-engine/data/          # Policy definitions
+services/agent-runtime/data/          # Agent state
+services/transaction-engine/data/     # Transaction history
+services/audit-observability/data/    # Audit logs & metrics
+```
+
+<Warning>
+**Production deployments** should:
+- Use dedicated data directories outside the source tree
+- Implement regular backups of wallet-engine data
+- Use KMS/HSM for key storage instead of encrypted files
+- Configure external databases (PostgreSQL) instead of SQLite
+</Warning>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Create your first wallet and execute a transaction
+  </Card>
+  <Card title="Configuration" icon="gear" href="/configuration">
+    Configure environment variables and signer backends
+  </Card>
+  <Card title="Creating Wallets" icon="wallet" href="/guides/creating-wallets">
+    Learn wallet creation and management
+  </Card>
+  <Card title="Deployment" icon="server" href="/operations/deployment">
+    Deploy to production with proper security
+  </Card>
+</CardGroup>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="npm install fails with EACCES error">
+    You may have permission issues. Try:
+
+    ```bash
+    sudo chown -R $(whoami) ~/.npm
+    npm install
+    ```
+
+    Or use a Node version manager like `nvm` to avoid permission issues.
+  </Accordion>
+
+  <Accordion title="anchor build fails with 'cargo not found'">
+    You need Rust installed for Anchor:
+
+    ```bash
+    curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh
+    source $HOME/.cargo/env
+    ```
+
+    Then retry:
+
+    ```bash
+    npm run escrow:build
+    ```
+  </Accordion>
+
+  <Accordion title="TypeScript compilation errors">
+    Ensure you're using the correct Node version:
+
+    ```bash
+    node --version  # Should be >= 20
+    ```
+
+    Clean and rebuild:
+
+    ```bash
+    rm -rf node_modules package-lock.json
+    rm -rf apps/*/node_modules services/*/node_modules packages/*/node_modules
+    npm install
+    npm run build
+    ```
+  </Accordion>
+
+  <Accordion title="Port already in use errors">
+    Check for existing processes:
+
+    ```bash
+    lsof -ti tcp:3000,3002,3003,3004,3005,3006,3007,3008
+    ```
+
+    Kill them:
+
+    ```bash
+    PIDS=$(for p in 3000 3002 3003 3004 3005 3006 3007 3008; do lsof -ti tcp:$p; done | sort -u)
+    [ -n "$PIDS" ] && kill $PIDS
+    ```
+
+    Or configure different ports in `.env` (see [Configuration](/configuration)).
+  </Accordion>
+</AccordionGroup>

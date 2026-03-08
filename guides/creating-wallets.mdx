@@ -1,0 +1,335 @@
+---
+title: Creating Wallets
+description: Learn how to create and manage wallets programmatically via CLI, API, and SDK
+---
+
+## Overview
+
+Agentic Wallet provides multiple interfaces for creating and managing Solana wallets. All wallets are created with secure key custody, automatic signing capabilities, and support for both SOL and SPL tokens.
+
+## Creating Wallets
+
+<Tabs>
+  <Tab title="CLI">
+    The CLI provides the simplest way to create wallets for testing and development.
+
+    ### Basic Wallet Creation
+
+    ```bash
+    npm run cli -- wallet create my-wallet
+    ```
+
+    ### Auto-funded Wallet (Devnet Only)
+
+    Create a wallet and automatically fund it with SOL:
+
+    ```bash
+    npm run cli -- wallet create trader-1 --auto-fund --fund-lamports 2000000
+    ```
+
+    <Note>
+      Auto-funding requires `WALLET_AUTOFUND_PAYER_PRIVATE_KEY` or `PRIVATE_KEY` in your environment.
+    </Note>
+
+    ### Legacy Compatibility CLI
+
+    For orchestrator compatibility:
+
+    ```bash
+    npm run wallets -- create --label bot-trader
+    npm run wallets -- create --label bot-trader --auto-fund --fund-lamports 2000000
+    npm run wallets -- list
+    ```
+  </Tab>
+
+  <Tab title="API">
+    Create wallets via HTTP requests to the API gateway.
+
+    ### Basic Request
+
+    ```bash
+    curl -X POST http://localhost:3000/api/v1/wallets \
+      -H "Content-Type: application/json" \
+      -H "x-api-key: dev-api-key" \
+      -d '{"label": "trading-wallet"}'
+    ```
+
+    ### Response
+
+    ```json
+    {
+      "status": "success",
+      "data": {
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "publicKey": "8xKz...",
+        "label": "trading-wallet",
+        "createdAt": "2026-03-08T12:00:00.000Z"
+      }
+    }
+    ```
+
+    ### With Auto-funding
+
+    ```bash
+    curl -X POST http://localhost:3000/api/v1/wallets \
+      -H "Content-Type: application/json" \
+      -H "x-api-key: dev-api-key" \
+      -d '{
+        "label": "funded-wallet",
+        "autoFund": true,
+        "fundLamports": 2000000
+      }'
+    ```
+  </Tab>
+
+  <Tab title="SDK">
+    Use the TypeScript SDK for programmatic wallet creation.
+
+    ### Initialize Client
+
+    ```typescript
+    import { createAgenticWalletClient } from '@agentic-wallet/sdk';
+
+    const client = createAgenticWalletClient('http://localhost:3000', {
+      apiKey: 'dev-api-key',
+      tenantId: 'optional-tenant-id'
+    });
+    ```
+
+    ### Create Wallet
+
+    ```typescript
+    const wallet = await client.wallet.create({
+      label: 'my-trading-bot'
+    });
+
+    console.log(`Wallet ID: ${wallet.id}`);
+    console.log(`Public Key: ${wallet.publicKey}`);
+    ```
+
+    ### Create with Auto-funding
+
+    ```typescript
+    const fundedWallet = await client.wallet.create({
+      label: 'funded-bot',
+      autoFund: true,
+      fundLamports: 2_000_000 // 0.002 SOL
+    });
+    ```
+
+    ### Full Example from Source
+
+    Real implementation from `scripts/wallets.ts`:
+
+    ```typescript
+    import 'dotenv/config';
+    import { createAgenticWalletClient } from '../packages/sdk/src/index.js';
+
+    const apiBase = process.env.API_BASE_URL ?? 'http://localhost:3000';
+    const apiKey = process.env.API_KEY ?? 'dev-api-key';
+
+    const client = createAgenticWalletClient(apiBase, { apiKey });
+
+    // Create wallet
+    const data = await client.wallet.create({
+      label: 'my-wallet',
+      autoFund: true,
+      fundLamports: 2000000
+    });
+
+    console.log(JSON.stringify({ status: 'success', data }, null, 2));
+    ```
+  </Tab>
+</Tabs>
+
+## Querying Wallet Information
+
+<Steps>
+  <Step title="Get Wallet Details">
+    Retrieve wallet information by ID:
+
+    <CodeGroup>
+      ```bash CLI
+      npm run cli -- wallet get <walletId>
+      ```
+
+      ```bash API
+      curl -H "x-api-key: dev-api-key" \
+        http://localhost:3000/api/v1/wallets/<walletId>
+      ```
+
+      ```typescript SDK
+      const wallet = await client.wallet.get(walletId);
+      ```
+    </CodeGroup>
+  </Step>
+
+  <Step title="Check SOL Balance">
+    Query the wallet's SOL balance:
+
+    <CodeGroup>
+      ```bash CLI
+      npm run cli -- wallet balance <walletId>
+      ```
+
+      ```bash API
+      curl -H "x-api-key: dev-api-key" \
+        http://localhost:3000/api/v1/wallets/<walletId>/balance
+      ```
+
+      ```typescript SDK
+      const balance = await client.wallet.balance(walletId);
+      console.log(`Balance: ${balance.lamports} lamports`);
+      ```
+    </CodeGroup>
+
+    **Response:**
+    ```json
+    {
+      "status": "success",
+      "data": {
+        "publicKey": "8xKz...",
+        "lamports": 2000000,
+        "sol": 0.002
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="List SPL Tokens">
+    Get all SPL token balances:
+
+    <CodeGroup>
+      ```bash CLI
+      npm run cli -- wallet tokens <walletId>
+      ```
+
+      ```bash API
+      curl -H "x-api-key: dev-api-key" \
+        http://localhost:3000/api/v1/wallets/<walletId>/tokens
+      ```
+
+      ```typescript SDK
+      const tokens = await client.wallet.tokens(walletId);
+      ```
+    </CodeGroup>
+
+    **Response:**
+    ```json
+    {
+      "status": "success",
+      "data": {
+        "tokens": [
+          {
+            "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "balance": "1000000",
+            "decimals": 6,
+            "uiAmount": 1.0
+          }
+        ]
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="List All Wallets">
+    Retrieve all wallets or find by public key:
+
+    <CodeGroup>
+      ```bash CLI - All Wallets
+      npm run wallets -- list
+      ```
+
+      ```bash CLI - By Public Key
+      npm run wallets -- list --public-key 8xKz...
+      ```
+
+      ```typescript SDK - All Wallets
+      const wallets = await client.wallet.list();
+      ```
+
+      ```typescript SDK - By Public Key
+      const wallet = await client.wallet.findByPublicKey(publicKey);
+      ```
+    </CodeGroup>
+  </Step>
+</Steps>
+
+## Key Management
+
+### Signer Backends
+
+Wallets use pluggable signer backends for key custody:
+
+<CodeGroup>
+  ```bash Encrypted File (Development)
+  WALLET_SIGNER_BACKEND=encrypted-file
+  WALLET_KEY_ENCRYPTION_SECRET=your-secret
+  ```
+
+  ```bash Memory (Testing)
+  WALLET_SIGNER_BACKEND=memory
+  # Keys lost on restart
+  ```
+
+  ```bash KMS (Production)
+  WALLET_SIGNER_BACKEND=kms
+  WALLET_KMS_MASTER_SECRET=your-kms-secret
+  WALLET_KMS_KEY_ID=optional-key-id
+  ```
+
+  ```bash HSM (High Security)
+  WALLET_SIGNER_BACKEND=hsm
+  WALLET_HSM_PIN=your-pin
+  WALLET_HSM_MODULE_SECRET=your-secret
+  WALLET_HSM_SLOT=optional-slot
+  ```
+
+  ```bash MPC (Distributed)
+  WALLET_SIGNER_BACKEND=mpc
+  WALLET_MPC_NODE_SECRETS=secret1,secret2,secret3
+  # Or individual secrets:
+  WALLET_MPC_NODE1_SECRET=secret1
+  WALLET_MPC_NODE2_SECRET=secret2
+  WALLET_MPC_NODE3_SECRET=secret3
+  ```
+</CodeGroup>
+
+<Warning>
+  **Production Security:** Use `kms`, `hsm`, or `mpc` backends in production. The `encrypted-file` backend is suitable for development only. Never use `memory` backend in production.
+</Warning>
+
+### Backend Selection Guide
+
+- **encrypted-file**: Best for local development and prototyping
+- **memory**: Testing only (ephemeral, keys lost on restart)
+- **kms**: Managed key governance with audit trails
+- **hsm**: Hardware-rooted custody for compliance
+- **mpc**: Distributed custody to reduce single-key-holder risk
+
+## Security Considerations
+
+<Note>
+  **Important Security Features:**
+  - Private keys never exposed via API
+  - All signing happens within wallet-engine boundary
+  - Agent code never has direct key access
+  - Multiple signer backend options for different security postures
+</Note>
+
+### Trust Boundaries
+
+1. **Agent Boundary**: Agents emit intents only, never handle keys
+2. **Signing Boundary**: Only wallet-engine signs transactions
+3. **Policy Boundary**: All spend-capable intents pass policy evaluation before signing
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Executing Transactions" icon="arrow-right" href="/guides/executing-transactions">
+    Learn how to create and execute transactions with your wallet
+  </Card>
+  <Card title="Setting Policies" icon="shield" href="/guides/setting-policies">
+    Protect your wallet with spending limits and security policies
+  </Card>
+</CardGroup>

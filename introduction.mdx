@@ -1,0 +1,132 @@
+---
+title: "Introduction"
+description: "Autonomous wallet infrastructure for AI agents on Solana"
+---
+
+## What is Agentic Wallet?
+
+Agentic Wallet is a production-ready infrastructure platform that enables AI agents to autonomously manage wallets and execute blockchain transactions on Solana devnet. It provides secure custody, policy enforcement, and multi-protocol interactions without agents ever handling private keys directly.
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Get up and running in 5 minutes
+  </Card>
+  <Card title="Architecture" icon="sitemap" href="/architecture/overview">
+    Understand the system design
+  </Card>
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore the REST API
+  </Card>
+  <Card title="Integration Guide" icon="plug" href="/integration/sdk">
+    Integrate with the SDK
+  </Card>
+</CardGroup>
+
+## Key Features
+
+<CardGroup cols={2}>
+  <Card title="Secure Custody" icon="lock">
+    Programmatic wallet creation with encrypted key storage. Multiple signer backends: encrypted-file, KMS, HSM, and MPC.
+  </Card>
+  <Card title="Policy Enforcement" icon="shield-check">
+    Configurable spending limits, address allowlists, protocol restrictions, and approval gates before transaction signing.
+  </Card>
+  <Card title="Multi-Protocol Support" icon="puzzle-piece">
+    Built-in adapters for Jupiter, Marinade, Solend, Metaplex, Orca, Raydium, and custom Anchor escrow contracts.
+  </Card>
+  <Card title="AI Agent Runtime" icon="robot">
+    Autonomous and supervised execution modes with capability manifests, budget controls, and backtesting.
+  </Card>
+  <Card title="Durable Execution" icon="arrows-rotate">
+    RPC failover, adaptive priority fees, retry logic, and SQLite-backed outbox queue for reliable transaction delivery.
+  </Card>
+  <Card title="Audit & Observability" icon="chart-line">
+    Complete audit trails, execution proofs, metrics, and replay endpoints for compliance and debugging.
+  </Card>
+</CardGroup>
+
+## How It Works
+
+Agentic Wallet separates concerns across multiple services to enforce security boundaries:
+
+<Steps>
+  <Step title="Agents Express Intents">
+    AI agents submit high-level intents (e.g., "swap SOL for USDC") via the API Gateway, without handling private keys or raw transactions.
+  </Step>
+  <Step title="Policy Evaluation">
+    The Policy Engine evaluates all spend-capable intents against configured rules: spending limits, allowlists, rate limits, and risk controls.
+  </Step>
+  <Step title="Transaction Construction">
+    Protocol Adapters build chain-specific transactions using real Solana programs (Jupiter for swaps, Marinade for staking, etc.).
+  </Step>
+  <Step title="Signing Boundary">
+    Only the Wallet Engine signs transactions. Agents never receive key material. Multiple signer backends supported for production use.
+  </Step>
+  <Step title="Submission & Confirmation">
+    The Transaction Engine submits to Solana RPC with failover, monitors confirmation, and generates immutable proof artifacts.
+  </Step>
+</Steps>
+
+## Architecture Overview
+
+```text
+Agent / CLI / SDK / MCP
+          |
+          v
+   API Gateway (auth, rate limiting, error normalization)
+          |
+          v
+Transaction Engine
+  -> build/simulate
+  -> policy evaluation
+  -> sign boundary (Wallet Engine)
+  -> submit/confirm
+  -> proof + audit
+          |
+          v
+Solana RPC / Protocol Programs
+```
+
+### Trust Boundaries
+
+- **Agent Boundary**: Agents emit intents only, never touch keys
+- **Signing Boundary**: Only `wallet-engine` signs transactions
+- **Policy Boundary**: All spend-capable intents pass policy evaluation before signing
+- **Protocol Boundary**: Adapter registry handles chain/protocol-specific build logic
+
+## Use Cases
+
+<AccordionGroup>
+  <Accordion title="Autonomous Trading Agents">
+    Build trading bots that execute swaps, provide liquidity, and manage portfolios with configurable risk controls and budget limits.
+  </Accordion>
+  <Accordion title="Multi-Agent Orchestration">
+    Coordinate multiple agents with independent wallets and budgets, each with capability allowlists and treasury allocations.
+  </Accordion>
+  <Accordion title="Escrow & Payment Workflows">
+    Deploy custom Anchor escrow contracts and automate milestone-based releases, disputes, and refunds.
+  </Accordion>
+  <Accordion title="AI-Powered DeFi">
+    Enable language models to interact with DeFi protocols (staking, lending, swapping) through natural language intents.
+  </Accordion>
+  <Accordion title="Compliance & Auditability">
+    Generate cryptographic proofs of execution, replay transaction pipelines, and maintain complete audit trails for regulatory compliance.
+  </Accordion>
+</AccordionGroup>
+
+## Get Started
+
+<CardGroup cols={2}>
+  <Card title="Quick Start" icon="play" href="/quickstart">
+    Install dependencies, start the stack, and execute your first transaction in under 5 minutes.
+  </Card>
+  <Card title="Installation" icon="download" href="/installation">
+    Detailed setup instructions for local development and production deployments.
+  </Card>
+  <Card title="Configuration" icon="sliders" href="/configuration">
+    Environment variables, service ports, signer backends, and RPC pool configuration.
+  </Card>
+  <Card title="Security Model" icon="shield" href="/security/overview">
+    Learn about key isolation, policy gates, and capability governance.
+  </Card>
+</CardGroup>

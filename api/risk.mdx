@@ -1,0 +1,487 @@
+---
+title: 'Risk Management'
+description: 'Risk configuration and chaos testing'
+icon: 'shield-exclamation'
+---
+
+## List Protocol Risk Configs
+
+List all protocol risk configurations.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/risk/protocols
+```
+
+### Response
+
+```json
+{
+  "status": "success",
+  "data": {
+    "protocols": [
+      {
+        "protocol": "jupiter",
+        "version": "1.0.0",
+        "maxSlippageBps": 100,
+        "maxPoolConcentrationBps": 5000,
+        "gaslessEligible": true,
+        "deltaVarianceBpsThreshold": 500,
+        "updatedAt": "2026-03-08T12:00:00.000Z"
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Get Protocol Risk Config
+
+Retrieve risk configuration for a specific protocol.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/risk/protocols/jupiter
+```
+
+### Path Parameters
+
+<ParamField path="protocol" type="string" required>
+  Protocol name
+</ParamField>
+
+### Response
+
+<ResponseField name="protocol" type="string" required>
+  Protocol name
+</ResponseField>
+
+<ResponseField name="version" type="string" required>
+  Config version
+</ResponseField>
+
+<ResponseField name="maxSlippageBps" type="number">
+  Maximum allowed slippage in basis points (0-10000)
+</ResponseField>
+
+<ResponseField name="maxPoolConcentrationBps" type="number">
+  Maximum pool concentration in basis points
+</ResponseField>
+
+<ResponseField name="allowedPools" type="array">
+  Array of allowed pool addresses
+</ResponseField>
+
+<ResponseField name="allowedPrograms" type="array">
+  Array of allowed program IDs
+</ResponseField>
+
+<ResponseField name="oracleDeviationBps" type="number">
+  Maximum oracle price deviation in basis points
+</ResponseField>
+
+<ResponseField name="requireOracleForSwap" type="boolean">
+  Whether oracle price check is required for swaps
+</ResponseField>
+
+<ResponseField name="maxQuoteAgeSeconds" type="number">
+  Maximum age of swap quote in seconds
+</ResponseField>
+
+<ResponseField name="deltaVarianceBpsThreshold" type="number">
+  Delta variance threshold for delta guard (basis points)
+</ResponseField>
+
+<ResponseField name="gaslessEligible" type="boolean">
+  Whether protocol supports gasless transactions
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string" required>
+  ISO 8601 timestamp
+</ResponseField>
+
+---
+
+## Update Protocol Risk Config
+
+Update or create risk configuration for a protocol.
+
+```bash cURL
+curl -X PUT \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "maxSlippageBps": 75,
+    "maxPoolConcentrationBps": 4000,
+    "gaslessEligible": false,
+    "deltaVarianceBpsThreshold": 300
+  }' \
+  http://localhost:3000/api/v1/risk/protocols/jupiter
+```
+
+### Path Parameters
+
+<ParamField path="protocol" type="string" required>
+  Protocol name
+</ParamField>
+
+### Request Body
+
+All fields are optional. Only provided fields are updated.
+
+<ParamField body="maxSlippageBps" type="number">
+  Maximum slippage (0-10000 basis points)
+</ParamField>
+
+<ParamField body="maxPoolConcentrationBps" type="number">
+  Maximum pool concentration (0-10000)
+</ParamField>
+
+<ParamField body="allowedPools" type="array">
+  Array of allowed pool addresses
+</ParamField>
+
+<ParamField body="allowedPrograms" type="array">
+  Array of allowed program IDs
+</ParamField>
+
+<ParamField body="oracleDeviationBps" type="number">
+  Oracle deviation threshold (0-10000)
+</ParamField>
+
+<ParamField body="requireOracleForSwap" type="boolean">
+  Require oracle price verification
+</ParamField>
+
+<ParamField body="maxQuoteAgeSeconds" type="number">
+  Maximum quote age in seconds
+</ParamField>
+
+<ParamField body="deltaVarianceBpsThreshold" type="number">
+  Delta guard threshold (0-10000)
+</ParamField>
+
+<ParamField body="gaslessEligible" type="boolean">
+  Allow gasless transactions
+</ParamField>
+
+---
+
+## List Portfolio Risk Controls
+
+List all portfolio risk controls.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/risk/portfolio
+```
+
+---
+
+## Get Portfolio Risk Controls
+
+Retrieve risk controls for a specific wallet.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/risk/portfolio/550e8400-e29b-41d4-a716-446655440000
+```
+
+### Path Parameters
+
+<ParamField path="walletId" type="string" required>
+  Wallet UUID
+</ParamField>
+
+### Response
+
+<ResponseField name="walletId" type="string" required>
+  Wallet UUID
+</ResponseField>
+
+<ResponseField name="maxDrawdownLamports" type="number">
+  Maximum allowed drawdown in lamports
+</ResponseField>
+
+<ResponseField name="maxDailyLossLamports" type="number">
+  Maximum allowed daily loss in lamports
+</ResponseField>
+
+<ResponseField name="maxExposureBpsPerToken" type="number">
+  Maximum exposure per token in basis points (0-10000)
+</ResponseField>
+
+<ResponseField name="maxExposureBpsPerProtocol" type="number">
+  Maximum exposure per protocol in basis points (0-10000)
+</ResponseField>
+
+<ResponseField name="autoPauseOnBreach" type="boolean" default={true}>
+  Automatically pause wallet on risk breach
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string" required>
+  ISO 8601 timestamp
+</ResponseField>
+
+---
+
+## Update Portfolio Risk Controls
+
+Update or create risk controls for a wallet.
+
+```bash cURL
+curl -X PUT \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "maxDrawdownLamports": 100000000,
+    "maxDailyLossLamports": 50000000,
+    "maxExposureBpsPerToken": 2500,
+    "maxExposureBpsPerProtocol": 5000,
+    "autoPauseOnBreach": true
+  }' \
+  http://localhost:3000/api/v1/risk/portfolio/550e8400-e29b-41d4-a716-446655440000
+```
+
+### Path Parameters
+
+<ParamField path="walletId" type="string" required>
+  Wallet UUID
+</ParamField>
+
+### Request Body
+
+All fields are optional. Only provided fields are updated.
+
+<ParamField body="maxDrawdownLamports" type="number">
+  Maximum drawdown threshold in lamports
+</ParamField>
+
+<ParamField body="maxDailyLossLamports" type="number">
+  Maximum daily loss threshold in lamports
+</ParamField>
+
+<ParamField body="maxExposureBpsPerToken" type="number">
+  Maximum token exposure (0-10000 basis points)
+</ParamField>
+
+<ParamField body="maxExposureBpsPerProtocol" type="number">
+  Maximum protocol exposure (0-10000 basis points)
+</ParamField>
+
+<ParamField body="autoPauseOnBreach" type="boolean" default={true}>
+  Auto-pause on breach
+</ParamField>
+
+---
+
+## Delta Guard
+
+The delta guard system verifies expected vs observed lamport movement in transactions.
+
+### How It Works
+
+1. Before transaction: Record wallet balance
+2. After confirmation: Check actual balance change
+3. Compare to expected change from transaction intent
+4. If deviation exceeds threshold: Flag or auto-pause
+
+### Configuration
+
+**Global Tolerance:**
+```bash
+DELTA_GUARD_ABSOLUTE_TOLERANCE_LAMPORTS=5000
+```
+
+**Per-Protocol Threshold:**
+```json
+{
+  "protocol": "jupiter",
+  "deltaVarianceBpsThreshold": 500
+}
+```
+
+### Example
+
+```
+Expected change: -1,000,000 lamports (swap input)
+Actual change:   -1,004,500 lamports (with fees)
+Deviance:          4,500 lamports
+Threshold:         5,000 lamports
+Result: PASS
+```
+
+---
+
+## Chaos Engineering
+
+Chaos mode injects controlled failures for resilience testing.
+
+### Get Chaos Config
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/chaos
+```
+
+### Response
+
+<ResponseField name="enabled" type="boolean" required>
+  Whether chaos mode is enabled
+</ResponseField>
+
+<ResponseField name="failureRates" type="object">
+  Failure rate percentages by stage
+  <Expandable title="stages">
+    <ResponseField name="simulation" type="number">
+      Simulation failure rate (0.0-1.0)
+    </ResponseField>
+    <ResponseField name="build" type="number">
+      Build failure rate (0.0-1.0)
+    </ResponseField>
+    <ResponseField name="sign" type="number">
+      Signing failure rate (0.0-1.0)
+    </ResponseField>
+    <ResponseField name="send" type="number">
+      Send failure rate (0.0-1.0)
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="latencyMs" type="number">
+  Additional latency to inject (milliseconds)
+</ResponseField>
+
+```json
+{
+  "status": "success",
+  "data": {
+    "enabled": false,
+    "failureRates": {
+      "simulation": 0.0,
+      "build": 0.0,
+      "sign": 0.0,
+      "send": 0.0
+    },
+    "latencyMs": 0
+  }
+}
+```
+
+---
+
+### Update Chaos Config
+
+```bash cURL
+curl -X PUT \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "enabled": true,
+    "failureRates": {
+      "simulation": 0.1,
+      "build": 0.05
+    },
+    "latencyMs": 100
+  }' \
+  http://localhost:3000/api/v1/chaos
+```
+
+### Request Body
+
+<ParamField body="enabled" type="boolean">
+  Enable/disable chaos mode
+</ParamField>
+
+<ParamField body="failureRates" type="object">
+  Failure rates by stage (0.0-1.0)
+</ParamField>
+
+<ParamField body="latencyMs" type="number">
+  Artificial latency in milliseconds
+</ParamField>
+
+<Warning>
+  Only enable chaos mode in testing environments. Never use in production.
+</Warning>
+
+---
+
+## Risk Monitoring Best Practices
+
+<Check>
+  Set protocol-specific slippage limits based on liquidity
+</Check>
+
+<Check>
+  Configure portfolio limits to prevent overexposure
+</Check>
+
+<Check>
+  Enable auto-pause for critical wallets
+</Check>
+
+<Check>
+  Monitor delta guard violations via audit events
+</Check>
+
+<Check>
+  Regularly review and update risk configs
+</Check>
+
+<Check>
+  Test chaos scenarios before production deployment
+</Check>
+
+---
+
+## Example: Conservative Risk Profile
+
+```json
+{
+  "protocolRisk": {
+    "jupiter": {
+      "maxSlippageBps": 50,
+      "maxPoolConcentrationBps": 3000,
+      "requireOracleForSwap": true,
+      "oracleDeviationBps": 100,
+      "maxQuoteAgeSeconds": 30,
+      "deltaVarianceBpsThreshold": 200,
+      "gaslessEligible": false
+    }
+  },
+  "portfolioRisk": {
+    "maxDrawdownLamports": 50000000,
+    "maxDailyLossLamports": 25000000,
+    "maxExposureBpsPerToken": 2000,
+    "maxExposureBpsPerProtocol": 3000,
+    "autoPauseOnBreach": true
+  }
+}
+```
+
+---
+
+## Example: Aggressive Risk Profile
+
+```json
+{
+  "protocolRisk": {
+    "jupiter": {
+      "maxSlippageBps": 200,
+      "maxPoolConcentrationBps": 7000,
+      "requireOracleForSwap": false,
+      "deltaVarianceBpsThreshold": 1000,
+      "gaslessEligible": true
+    }
+  },
+  "portfolioRisk": {
+    "maxDrawdownLamports": 500000000,
+    "maxDailyLossLamports": 250000000,
+    "maxExposureBpsPerToken": 5000,
+    "maxExposureBpsPerProtocol": 7000,
+    "autoPauseOnBreach": false
+  }
+}
+```

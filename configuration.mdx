@@ -1,0 +1,613 @@
+---
+title: 'Configuration'
+description: 'Complete environment configuration reference for Agentic Wallet'
+---
+
+Agentic Wallet is configured entirely through environment variables. This guide covers all configuration options organized by functional area.
+
+## Configuration File
+
+All environment variables are defined in `.env` file at the repository root:
+
+```bash
+cp .env.example .env
+```
+
+<Warning>
+**Never commit `.env` to version control.** The `.env` file contains sensitive secrets like encryption keys and API keys.
+</Warning>
+
+## Loading Environment
+
+Before starting services, load your environment:
+
+```bash
+set -a; source .env; set +a
+npm run dev
+```
+
+## Service Ports
+
+Configure ports for each microservice:
+
+| Variable | Default | Service |
+|----------|---------|----------|
+| `API_GATEWAY_PORT` | `3000` | API Gateway - main entry point |
+| `WALLET_ENGINE_PORT` | `3002` | Wallet Engine - custody & signing |
+| `POLICY_ENGINE_PORT` | `3003` | Policy Engine - rule evaluation |
+| `AGENT_RUNTIME_PORT` | `3004` | Agent Runtime - agent lifecycle |
+| `PROTOCOL_ADAPTERS_PORT` | `3005` | Protocol Adapters - protocol integrations |
+| `TRANSACTION_ENGINE_PORT` | `3006` | Transaction Engine - tx pipeline |
+| `AUDIT_OBSERVABILITY_PORT` | `3007` | Audit & Observability - logs & metrics |
+| `MCP_SERVER_PORT` | `3008` | MCP Server - MCP tools interface |
+
+```bash .env
+API_GATEWAY_PORT=3000
+WALLET_ENGINE_PORT=3002
+POLICY_ENGINE_PORT=3003
+AGENT_RUNTIME_PORT=3004
+PROTOCOL_ADAPTERS_PORT=3005
+TRANSACTION_ENGINE_PORT=3006
+AUDIT_OBSERVABILITY_PORT=3007
+MCP_SERVER_PORT=3008
+```
+
+<Note>
+If you change ports, ensure services can reach each other via the service URL variables (see below).
+</Note>
+
+## Service URLs
+
+Internal service-to-service communication URLs:
+
+```bash .env
+WALLET_ENGINE_URL=http://localhost:3002
+POLICY_ENGINE_URL=http://localhost:3003
+AGENT_RUNTIME_URL=http://localhost:3004
+PROTOCOL_ADAPTERS_URL=http://localhost:3005
+TRANSACTION_ENGINE_URL=http://localhost:3006
+AUDIT_OBSERVABILITY_URL=http://localhost:3007
+MCP_SERVER_URL=http://localhost:3008
+```
+
+<Info>
+For distributed deployments, change these to network-accessible URLs (e.g., `http://wallet-engine.internal:3002`).
+</Info>
+
+## RPC Configuration
+
+Configure Solana RPC endpoints and connection behavior:
+
+### RPC URLs
+
+```bash .env
+# Primary RPC endpoint
+SOLANA_RPC_URL=https://api.devnet.solana.com
+
+# RPC pool for failover (comma-separated)
+SOLANA_RPC_POOL_URLS=https://api.devnet.solana.com
+
+# Health probe interval (milliseconds)
+SOLANA_RPC_HEALTH_PROBE_MS=15000
+```
+
+<Tabs>
+  <Tab title="Devnet">
+    ```bash .env
+    SOLANA_RPC_URL=https://api.devnet.solana.com
+    SOLANA_RPC_POOL_URLS=https://api.devnet.solana.com
+    ```
+  </Tab>
+  <Tab title="Mainnet (Helius)">
+    ```bash .env
+    SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
+    SOLANA_RPC_POOL_URLS=https://mainnet.helius-rpc.com/?api-key=KEY1,https://solana-api.projectserum.com
+    ```
+  </Tab>
+  <Tab title="Mainnet (QuickNode)">
+    ```bash .env
+    SOLANA_RPC_URL=https://your-endpoint.solana-mainnet.quiknode.pro/YOUR_TOKEN/
+    SOLANA_RPC_POOL_URLS=https://your-endpoint.solana-mainnet.quiknode.pro/YOUR_TOKEN/
+    ```
+  </Tab>
+  <Tab title="Custom RPC">
+    ```bash .env
+    SOLANA_RPC_URL=http://your-custom-rpc:8899
+    SOLANA_RPC_POOL_URLS=http://rpc1:8899,http://rpc2:8899,http://rpc3:8899
+    ```
+  </Tab>
+</Tabs>
+
+### Priority Fees
+
+Control transaction priority fee behavior:
+
+```bash .env
+# Minimum priority fee (microlamports)
+SOLANA_PRIORITY_FEE_MIN_MICROLAMPORTS=2000
+
+# Maximum priority fee (microlamports)
+SOLANA_PRIORITY_FEE_MAX_MICROLAMPORTS=200000
+
+# Percentile for dynamic fee calculation
+SOLANA_PRIORITY_FEE_PERCENTILE=75
+
+# Fee multiplier in basis points (10000 = 1.0x)
+SOLANA_PRIORITY_FEE_MULTIPLIER_BPS=1150
+```
+
+<Info>
+**How it works:** The transaction engine fetches recent priority fees, takes the specified percentile, applies the multiplier, and clamps to min/max bounds.
+</Info>
+
+### Delta Guard
+
+Tolerance for expected vs. actual balance changes:
+
+```bash .env
+# Absolute tolerance in lamports
+DELTA_GUARD_ABSOLUTE_TOLERANCE_LAMPORTS=10000
+```
+
+<Note>
+Delta guard helps detect unexpected balance changes that could indicate simulation drift or front-running.
+</Note>
+
+## Wallet & Signing
+
+### Encryption Secret
+
+**Required for all deployments:**
+
+```bash .env
+WALLET_KEY_ENCRYPTION_SECRET=your-long-random-secret-here
+```
+
+<Warning>
+**Critical:** Use a cryptographically secure random string of at least 32 characters. This encrypts wallet private keys at rest.
+
+Generate a secure secret:
+```bash
+openssl rand -base64 32
+```
+</Warning>
+
+### Signer Backend
+
+Choose your key storage backend:
+
+```bash .env
+WALLET_SIGNER_BACKEND=encrypted-file
+```
+
+Available backends:
+
+<Tabs>
+  <Tab title="encrypted-file">
+    **Best for:** Local development, fast prototyping
+
+    ```bash .env
+    WALLET_SIGNER_BACKEND=encrypted-file
+    WALLET_KEY_ENCRYPTION_SECRET=your-long-random-secret
+    ```
+
+    - Keys stored in `services/wallet-engine/data/`
+    - Encrypted using AES-256-GCM with `WALLET_KEY_ENCRYPTION_SECRET`
+    - Simple, no external dependencies
+    - ⚠️ Keys are only as secure as the filesystem and encryption secret
+  </Tab>
+  <Tab title="memory">
+    **Best for:** Testing, ephemeral environments
+
+    ```bash .env
+    WALLET_SIGNER_BACKEND=memory
+    ```
+
+    - Keys stored in process memory only
+    - Lost on process restart
+    - ⚠️ **Not suitable for any persistent use**
+  </Tab>
+  <Tab title="kms">
+    **Best for:** Managed key governance, audit trails
+
+    ```bash .env
+    WALLET_SIGNER_BACKEND=kms
+    WALLET_KMS_MASTER_SECRET=your-kms-master-secret
+    WALLET_KMS_KEY_ID=wallet-engine-kms-key
+    ```
+
+    - Centralized key management
+    - Access control and rotation policies
+    - Key usage auditability
+    - Requires external KMS provider integration
+  </Tab>
+  <Tab title="hsm">
+    **Best for:** Hardware-rooted custody, compliance
+
+    ```bash .env
+    WALLET_SIGNER_BACKEND=hsm
+    WALLET_HSM_SLOT=slot-0
+    WALLET_HSM_PIN=your-hsm-pin
+    WALLET_HSM_MODULE_SECRET=your-module-secret
+    ```
+
+    - Hardware-backed key security
+    - FIPS 140-2 Level 2+ compliance
+    - Physical tamper resistance
+    - Requires HSM hardware or HSM-as-a-Service
+  </Tab>
+  <Tab title="mpc">
+    **Best for:** Distributed custody, threshold signing
+
+    ```bash .env
+    WALLET_SIGNER_BACKEND=mpc
+    WALLET_MPC_NODE_SECRETS=secret1,secret2,secret3
+    # OR
+    WALLET_MPC_NODE1_SECRET=secret1
+    WALLET_MPC_NODE2_SECRET=secret2
+    WALLET_MPC_NODE3_SECRET=secret3
+    ```
+
+    - Key material split across multiple nodes
+    - Threshold signing (e.g., 2-of-3)
+    - Reduces single-key-holder risk
+    - Requires MPC infrastructure
+  </Tab>
+</Tabs>
+
+<Card title="Choosing a Signer Backend" icon="key">
+  **Development:** Use `encrypted-file` for simplicity
+  
+  **Staging:** Use `kms` or `hsm` to test production-like security
+  
+  **Production:** Use `kms`, `hsm`, or `mpc` based on your security and compliance requirements
+</Card>
+
+### Auto-Funding (Devnet Only)
+
+```bash .env
+# Default funding amount for auto-funded wallets (lamports)
+WALLET_AUTOFUND_DEFAULT_LAMPORTS=2000000
+
+# Payer private key for devnet funding (base58)
+WALLET_AUTOFUND_PAYER_PRIVATE_KEY=
+```
+
+<Warning>
+**Devnet only.** Do not use auto-funding on mainnet. The `WALLET_AUTOFUND_PAYER_PRIVATE_KEY` is a plaintext private key and should only contain devnet SOL.
+</Warning>
+
+## Data Storage
+
+### Data Directories
+
+```bash .env
+WALLET_ENGINE_DATA_DIR=services/wallet-engine/data
+POLICY_ENGINE_DATA_DIR=services/policy-engine/data
+AGENT_RUNTIME_DATA_DIR=services/agent-runtime/data
+TRANSACTION_ENGINE_DATA_DIR=services/transaction-engine/data
+AUDIT_OBSERVABILITY_DATA_DIR=services/audit-observability/data
+```
+
+<Info>
+**Production tip:** Use absolute paths outside the source tree for data directories, and ensure they're included in your backup strategy.
+</Info>
+
+### Database Paths (Optional)
+
+Override individual SQLite database paths:
+
+```bash .env
+WALLET_ENGINE_DB_PATH=
+POLICY_ENGINE_DB_PATH=
+AGENT_RUNTIME_DB_PATH=
+TRANSACTION_ENGINE_DB_PATH=
+AUDIT_OBSERVABILITY_DB_PATH=
+```
+
+<Note>
+Leave empty to use default paths within data directories. Set explicitly for custom database locations.
+</Note>
+
+## API Gateway & Authentication
+
+### API Keys
+
+```bash .env
+# Enforce API key authentication
+API_GATEWAY_ENFORCE_AUTH=true
+
+# API keys in format: key:tenant:scope1,scope2;key2:*:all
+API_GATEWAY_API_KEYS=dev-api-key:*:all
+
+# Rate limit per API key (requests per minute)
+API_GATEWAY_RATE_LIMIT_PER_MINUTE=120
+```
+
+**API Key Format:**
+
+```
+key:tenant:scope1,scope2,scope3
+```
+
+- `key`: The actual API key string
+- `tenant`: Tenant ID, or `*` for all tenants
+- `scopes`: Comma-separated scope list, or `all` for all scopes
+
+Multiple keys separated by semicolons:
+
+```bash .env
+API_GATEWAY_API_KEYS=dev-key:*:all;prod-key:acme:wallets,transactions;admin-key:*:all
+```
+
+### Client Configuration
+
+```bash .env
+# Base URL for SDK/CLI clients
+API_BASE_URL=http://localhost:3000
+
+# Default API key for CLI
+API_KEY=dev-api-key
+
+# Optional tenant ID
+TENANT_ID=
+```
+
+## Agent Configuration
+
+### Manifest Signing
+
+```bash .env
+# Secret for signing capability manifests
+AGENT_MANIFEST_SIGNING_SECRET=your-manifest-signing-secret
+
+# Manifest issuer identifier
+AGENT_MANIFEST_ISSUER=agent-runtime
+
+# Require signed manifests for agent execution
+AGENT_REQUIRE_MANIFEST=false
+
+# Require backtest pass before autonomous execution
+AGENT_REQUIRE_BACKTEST_PASS=false
+```
+
+<Warning>
+**Production:** Set `AGENT_REQUIRE_MANIFEST=true` and `AGENT_REQUIRE_BACKTEST_PASS=true` to enforce capability governance.
+</Warning>
+
+### Pause Webhook
+
+```bash .env
+# Optional webhook secret for auto-pause notifications
+AGENT_PAUSE_WEBHOOK_SECRET=
+```
+
+## Transaction Engine
+
+### Outbox Queue
+
+Durable transaction queue configuration:
+
+```bash .env
+# Lease duration for in-flight transactions (milliseconds)
+TX_OUTBOX_LEASE_MS=30000
+
+# Polling interval for queue drain (milliseconds)
+TX_OUTBOX_POLL_MS=2000
+
+# Maximum retry attempts before marking as failed
+TX_OUTBOX_MAX_ATTEMPTS=6
+```
+
+<Info>
+**How it works:** Failed transactions are automatically retried up to `TX_OUTBOX_MAX_ATTEMPTS` times with exponential backoff.
+</Info>
+
+## Protocol-Specific Configuration
+
+### Escrow Program
+
+```bash .env
+# Deployed escrow program ID
+ESCROW_PROGRAM_ID=
+```
+
+Set this after deploying the escrow program:
+
+```bash
+npm run escrow:deploy:devnet
+```
+
+The deploy script automatically updates `.env` with the program ID.
+
+### Kora (Gasless Transactions)
+
+```bash .env
+# Kora RPC URL for gasless transaction support
+KORA_RPC_URL=http://localhost:8080
+```
+
+<Note>
+Kora integration enables gasless transactions where the platform pays transaction fees on behalf of users.
+</Note>
+
+### Deploy Key
+
+Private key for program deployment and devnet funding:
+
+```bash .env
+# Base58 secret key or JSON byte array
+PRIVATE_KEY=
+```
+
+<Warning>
+**Only for devnet deployments.** Never use this in production. Store production deploy keys in secure key management systems.
+</Warning>
+
+## CLI Configuration
+
+```bash .env
+# CLI theme: matrix, midnight, solarized, fire
+CLI_THEME=matrix
+```
+
+Change themes:
+
+```bash
+npm run cli -- --theme midnight doctor
+npm run cli -- --theme fire wallet list
+```
+
+## Environment Examples
+
+<AccordionGroup>
+  <Accordion title="Minimal Local Development">
+    ```bash .env
+    # RPC
+    SOLANA_RPC_URL=https://api.devnet.solana.com
+    
+    # Wallet
+    WALLET_KEY_ENCRYPTION_SECRET=dev-local-secret-change-in-prod
+    WALLET_SIGNER_BACKEND=encrypted-file
+    
+    # Auth
+    API_GATEWAY_API_KEYS=dev-api-key:*:all
+    API_GATEWAY_ENFORCE_AUTH=false
+    
+    # Ports (defaults)
+    API_GATEWAY_PORT=3000
+    WALLET_ENGINE_PORT=3002
+    POLICY_ENGINE_PORT=3003
+    AGENT_RUNTIME_PORT=3004
+    PROTOCOL_ADAPTERS_PORT=3005
+    TRANSACTION_ENGINE_PORT=3006
+    AUDIT_OBSERVABILITY_PORT=3007
+    MCP_SERVER_PORT=3008
+    ```
+  </Accordion>
+
+  <Accordion title="Production-Ready Staging">
+    ```bash .env
+    # RPC with failover
+    SOLANA_RPC_URL=https://mainnet.helius-rpc.com/?api-key=YOUR_KEY
+    SOLANA_RPC_POOL_URLS=https://mainnet.helius-rpc.com/?api-key=KEY1,https://solana-api.projectserum.com,https://api.mainnet-beta.solana.com
+    
+    # Secure wallet storage
+    WALLET_KEY_ENCRYPTION_SECRET=<openssl-rand-base64-32>
+    WALLET_SIGNER_BACKEND=kms
+    WALLET_KMS_MASTER_SECRET=<kms-secret>
+    WALLET_KMS_KEY_ID=wallet-engine-staging
+    
+    # Strict auth
+    API_GATEWAY_ENFORCE_AUTH=true
+    API_GATEWAY_API_KEYS=staging-key-1:<tenant>:all;readonly-key:<tenant>:wallets,transactions
+    API_GATEWAY_RATE_LIMIT_PER_MINUTE=300
+    
+    # Agent governance
+    AGENT_REQUIRE_MANIFEST=true
+    AGENT_REQUIRE_BACKTEST_PASS=true
+    AGENT_MANIFEST_SIGNING_SECRET=<openssl-rand-base64-32>
+    
+    # External data paths
+    WALLET_ENGINE_DATA_DIR=/mnt/data/wallet-engine
+    TRANSACTION_ENGINE_DATA_DIR=/mnt/data/transaction-engine
+    AUDIT_OBSERVABILITY_DATA_DIR=/mnt/data/audit
+    ```
+  </Accordion>
+
+  <Accordion title="High-Security Production">
+    ```bash .env
+    # RPC
+    SOLANA_RPC_URL=https://your-dedicated-rpc.example.com
+    SOLANA_RPC_POOL_URLS=https://rpc1.internal,https://rpc2.internal,https://rpc3.internal
+    
+    # HSM-backed signing
+    WALLET_KEY_ENCRYPTION_SECRET=<vault-injected>
+    WALLET_SIGNER_BACKEND=hsm
+    WALLET_HSM_SLOT=slot-0
+    WALLET_HSM_PIN=<vault-injected>
+    WALLET_HSM_MODULE_SECRET=<vault-injected>
+    
+    # Strict auth with multiple keys
+    API_GATEWAY_ENFORCE_AUTH=true
+    API_GATEWAY_API_KEYS=<vault-injected>
+    API_GATEWAY_RATE_LIMIT_PER_MINUTE=1000
+    
+    # Full governance
+    AGENT_REQUIRE_MANIFEST=true
+    AGENT_REQUIRE_BACKTEST_PASS=true
+    AGENT_MANIFEST_SIGNING_SECRET=<vault-injected>
+    AGENT_PAUSE_WEBHOOK_SECRET=<vault-injected>
+    
+    # Network-accessible service URLs
+    WALLET_ENGINE_URL=http://wallet-engine.internal.svc:3002
+    POLICY_ENGINE_URL=http://policy-engine.internal.svc:3003
+    TRANSACTION_ENGINE_URL=http://transaction-engine.internal.svc:3006
+    
+    # PostgreSQL (requires code changes)
+    # DATABASE_URL=postgresql://user:pass@db.internal:5432/agentic_wallet
+    ```
+  </Accordion>
+</AccordionGroup>
+
+## Security Best Practices
+
+<CardGroup cols={2}>
+  <Card title="Secrets Management" icon="lock">
+    - Use a secrets manager (Vault, AWS Secrets Manager, etc.)
+    - Inject secrets at runtime, never commit to git
+    - Rotate `WALLET_KEY_ENCRYPTION_SECRET` periodically
+    - Use different secrets per environment
+  </Card>
+  <Card title="Network Security" icon="shield">
+    - Use TLS for all service-to-service communication
+    - Restrict network access to internal services
+    - Use firewall rules to limit port access
+    - Enable audit logging for all API calls
+  </Card>
+  <Card title="Key Storage" icon="key">
+    - Never use `encrypted-file` backend in production
+    - Prefer KMS/HSM for production key custody
+    - Implement key rotation policies
+    - Backup wallet data with encryption
+  </Card>
+  <Card title="API Keys" icon="fingerprint">
+    - Generate cryptographically random API keys
+    - Use scoped keys with minimum required permissions
+    - Rotate API keys regularly
+    - Monitor for unauthorized access attempts
+  </Card>
+</CardGroup>
+
+## Validation
+
+Verify your configuration:
+
+```bash
+# Check environment is loaded
+echo $WALLET_KEY_ENCRYPTION_SECRET
+echo $API_GATEWAY_API_KEYS
+
+# Run configuration check
+npm run cli -- doctor
+
+# Test service connectivity
+curl -H "x-api-key: $API_KEY" http://localhost:3000/health
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Quickstart" icon="rocket" href="/quickstart">
+    Start services and execute your first transaction
+  </Card>
+  <Card title="Security Guide" icon="shield" href="/security/overview">
+    Learn about trust boundaries and security model
+  </Card>
+  <Card title="Agent Setup" icon="robot" href="/concepts/agents">
+    Configure autonomous agents with capabilities
+  </Card>
+  <Card title="Deployment" icon="server" href="/operations/deployment">
+    Deploy to production with proper hardening
+  </Card>
+</CardGroup>

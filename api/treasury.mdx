@@ -1,0 +1,382 @@
+---
+title: 'Treasury'
+description: 'Agent budget allocation and rebalancing'
+icon: 'vault'
+---
+
+## Allocate Budget
+
+Allocate budget from treasury to an agent.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "targetAgentId": "123e4567-e89b-12d3-a456-426614174000",
+    "lamports": 100000000,
+    "reason": "Initial trading budget",
+    "sourceAgentId": "optional-source-agent-id"
+  }' \
+  http://localhost:3000/api/v1/treasury/allocate
+```
+
+### Request Body
+
+<ParamField body="targetAgentId" type="string" required>
+  Agent UUID receiving the allocation
+</ParamField>
+
+<ParamField body="lamports" type="number" required>
+  Amount to allocate in lamports (must be positive)
+</ParamField>
+
+<ParamField body="reason" type="string" default="treasury allocation">
+  Reason for allocation (1-256 characters)
+</ParamField>
+
+<ParamField body="sourceAgentId" type="string">
+  Optional source agent UUID (if reallocating from another agent)
+</ParamField>
+
+### Response
+
+<ResponseField name="allocationId" type="string" required>
+  Unique allocation identifier
+</ResponseField>
+
+<ResponseField name="targetAgentId" type="string" required>
+  Target agent UUID
+</ResponseField>
+
+<ResponseField name="sourceAgentId" type="string">
+  Source agent UUID (if provided)
+</ResponseField>
+
+<ResponseField name="lamports" type="number" required>
+  Allocated amount
+</ResponseField>
+
+<ResponseField name="reason" type="string" required>
+  Allocation reason
+</ResponseField>
+
+<ResponseField name="timestamp" type="string" required>
+  ISO 8601 timestamp
+</ResponseField>
+
+```json
+{
+  "status": "success",
+  "data": {
+    "allocationId": "abc123-def456-...",
+    "targetAgentId": "123e4567-e89b-12d3-a456-426614174000",
+    "lamports": 100000000,
+    "reason": "Initial trading budget",
+    "timestamp": "2026-03-08T12:00:00.000Z"
+  }
+}
+```
+
+---
+
+## Rebalance Budget
+
+Rebalance budget between two agents.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "sourceAgentId": "123e4567-e89b-12d3-a456-426614174000",
+    "targetAgentId": "234f5678-f90c-23e4-b827-537725285111",
+    "lamports": 50000000,
+    "reason": "Rebalancing after performance review"
+  }' \
+  http://localhost:3000/api/v1/treasury/rebalance
+```
+
+### Request Body
+
+<ParamField body="sourceAgentId" type="string" required>
+  Agent UUID to transfer budget from
+</ParamField>
+
+<ParamField body="targetAgentId" type="string" required>
+  Agent UUID to transfer budget to
+</ParamField>
+
+<ParamField body="lamports" type="number" required>
+  Amount to transfer in lamports (must be positive)
+</ParamField>
+
+<ParamField body="reason" type="string" default="treasury rebalance">
+  Reason for rebalance (1-256 characters)
+</ParamField>
+
+### Response
+
+<ResponseField name="rebalanceId" type="string" required>
+  Unique rebalance identifier
+</ResponseField>
+
+<ResponseField name="sourceAgentId" type="string" required>
+  Source agent UUID
+</ResponseField>
+
+<ResponseField name="targetAgentId" type="string" required>
+  Target agent UUID
+</ResponseField>
+
+<ResponseField name="lamports" type="number" required>
+  Transferred amount
+</ResponseField>
+
+<ResponseField name="reason" type="string" required>
+  Rebalance reason
+</ResponseField>
+
+<ResponseField name="timestamp" type="string" required>
+  ISO 8601 timestamp
+</ResponseField>
+
+```json
+{
+  "status": "success",
+  "data": {
+    "rebalanceId": "xyz789-abc012-...",
+    "sourceAgentId": "123e4567-e89b-12d3-a456-426614174000",
+    "targetAgentId": "234f5678-f90c-23e4-b827-537725285111",
+    "lamports": 50000000,
+    "reason": "Rebalancing after performance review",
+    "timestamp": "2026-03-08T12:00:00.000Z"
+  }
+}
+```
+
+---
+
+## Agent Budget Operations
+
+Agent budgets are tracked and enforced automatically:
+
+### Get Agent Budget
+
+See [Agent Budget API](/api/agents#get-agent-budget) for retrieving current budget and spending.
+
+```bash
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/agents/123e4567-e89b-12d3-a456-426614174000/budget
+```
+
+### Budget Enforcement
+
+Budgets are enforced at transaction execution:
+
+1. **Check available budget** before transaction
+2. **Deduct from budget** on successful transaction
+3. **Reject if insufficient** budget remaining
+4. **Reset daily spending** at midnight UTC
+
+---
+
+## Treasury Workflows
+
+### Initial Setup
+
+<Steps>
+  <Step title="Create Agents">
+    Create agents with initial budgets:
+    ```bash
+    curl -X POST \
+      -H "x-api-key: dev-api-key" \
+      -d '{
+        "name": "Trading Bot Alpha",
+        "executionMode": "autonomous",
+        "budgetLamports": 100000000
+      }' \
+      http://localhost:3000/api/v1/agents
+    ```
+  </Step>
+  <Step title="Allocate Additional Budget">
+    Add more budget as needed:
+    ```bash
+    curl -X POST \
+      -H "x-api-key: dev-api-key" \
+      -d '{
+        "targetAgentId": "agent-id",
+        "lamports": 50000000,
+        "reason": "Additional allocation for high-volume trading"
+      }' \
+      http://localhost:3000/api/v1/treasury/allocate
+    ```
+  </Step>
+  <Step title="Monitor Spending">
+    Track budget usage:
+    ```bash
+    curl -H "x-api-key: dev-api-key" \
+         http://localhost:3000/api/v1/agents/agent-id/budget
+    ```
+  </Step>
+</Steps>
+
+---
+
+### Performance-Based Rebalancing
+
+<Steps>
+  <Step title="Review Agent Performance">
+    Check transaction success rates and profitability via audit events:
+    ```bash
+    curl -H "x-api-key: dev-api-key" \
+         "http://localhost:3000/api/v1/audit/events?agentId=agent-id"
+    ```
+  </Step>
+  <Step title="Rebalance Budgets">
+    Shift budget from underperforming to high-performing agents:
+    ```bash
+    curl -X POST \
+      -H "x-api-key: dev-api-key" \
+      -d '{
+        "sourceAgentId": "underperforming-agent-id",
+        "targetAgentId": "high-performing-agent-id",
+        "lamports": 25000000,
+        "reason": "Performance-based rebalancing"
+      }' \
+      http://localhost:3000/api/v1/treasury/rebalance
+    ```
+  </Step>
+  <Step title="Update Capabilities">
+    Adjust agent capabilities based on performance:
+    ```bash
+    curl -X PUT \
+      -H "x-api-key: dev-api-key" \
+      -d '{"allowedIntents": [...]}' \
+      http://localhost:3000/api/v1/agents/agent-id/capabilities
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Budget Constraints
+
+### Transaction Execution
+
+When an agent executes a transaction:
+
+1. **Budget Check:**
+   ```
+   if (transaction.estimatedCost > agent.budgetLamports - agent.spentLamportsToday) {
+     return deny("Insufficient budget");
+   }
+   ```
+
+2. **Policy Evaluation:**
+   - Spending limits
+   - Protocol restrictions
+   - Risk thresholds
+
+3. **Execution:**
+   - Transaction submitted
+   - Budget updated on confirmation
+
+4. **Daily Reset:**
+   - `spentLamportsToday` resets at midnight UTC
+   - Total `budgetLamports` persists
+
+---
+
+## Audit Trail
+
+All treasury operations are logged to audit events:
+
+```bash
+curl -H "x-api-key: dev-api-key" \
+     "http://localhost:3000/api/v1/audit/events?entityType=agent"
+```
+
+Events include:
+- `treasury.allocate`
+- `treasury.rebalance`
+- `agent.budget.updated`
+- `agent.budget.exceeded`
+- `agent.budget.reset`
+
+---
+
+## Best Practices
+
+<Check>
+  **Set conservative initial budgets** and increase based on performance
+</Check>
+
+<Check>
+  **Monitor daily spending** to detect anomalies early
+</Check>
+
+<Check>
+  **Use descriptive reasons** for all allocations and rebalances
+</Check>
+
+<Check>
+  **Implement budget alerts** when spending exceeds thresholds
+</Check>
+
+<Check>
+  **Review budget usage** regularly via audit events
+</Check>
+
+<Check>
+  **Coordinate with policy limits** - budgets and policies work together
+</Check>
+
+---
+
+## Example: Multi-Agent Treasury
+
+```bash
+# Create three agents with different strategies
+
+# Conservative agent - 100 SOL budget
+curl -X POST -H "x-api-key: dev-api-key" \
+  -d '{"name": "Conservative Bot", "budgetLamports": 100000000000}' \
+  http://localhost:3000/api/v1/agents
+
+# Moderate agent - 50 SOL budget
+curl -X POST -H "x-api-key: dev-api-key" \
+  -d '{"name": "Moderate Bot", "budgetLamports": 50000000000}' \
+  http://localhost:3000/api/v1/agents
+
+# Aggressive agent - 25 SOL budget (testing)
+curl -X POST -H "x-api-key: dev-api-key" \
+  -d '{"name": "Aggressive Bot", "budgetLamports": 25000000000}' \
+  http://localhost:3000/api/v1/agents
+
+# After 1 week: rebalance based on performance
+# If aggressive bot performs well, increase budget:
+
+curl -X POST -H "x-api-key: dev-api-key" \
+  -d '{
+    "sourceAgentId": "conservative-bot-id",
+    "targetAgentId": "aggressive-bot-id",
+    "lamports": 25000000000,
+    "reason": "Aggressive strategy outperforming - increasing allocation"
+  }' \
+  http://localhost:3000/api/v1/treasury/rebalance
+```
+
+---
+
+## Transaction Types
+
+Treasury operations can be executed via:
+
+1. **Direct API calls** (shown above)
+2. **Agent execution** with `treasury_allocate` or `treasury_rebalance` transaction types
+3. **CLI commands:**
+   ```bash
+   npm run cli -- treasury allocate --target-agent-id <id> --lamports <amount>
+   npm run cli -- treasury rebalance --source-agent-id <id> --target-agent-id <id> --lamports <amount>
+   ```

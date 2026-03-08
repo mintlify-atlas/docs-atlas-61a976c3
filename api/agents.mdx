@@ -1,0 +1,660 @@
+---
+title: 'Agents'
+description: 'Agent runtime, execution, and capability management'
+icon: 'robot'
+---
+
+## Create Agent
+
+Create an autonomous or supervised agent.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "Trading Bot Alpha",
+    "walletId": "550e8400-e29b-41d4-a716-446655440000",
+    "executionMode": "autonomous",
+    "allowedIntents": ["transfer_sol", "swap", "query_balance"],
+    "budgetLamports": 100000000
+  }' \
+  http://localhost:3000/api/v1/agents
+```
+
+### Request Body
+
+<ParamField body="name" type="string" required>
+  Agent name (1-128 characters)
+</ParamField>
+
+<ParamField body="walletId" type="string">
+  Wallet UUID for this agent (auto-created if omitted)
+</ParamField>
+
+<ParamField body="executionMode" type="enum" default="autonomous">
+  `autonomous` or `supervised`
+</ParamField>
+
+<ParamField body="allowedIntents" type="array" default="[transfer_sol, transfer_spl, query_balance]">
+  Array of allowed transaction types
+</ParamField>
+
+<ParamField body="budgetLamports" type="number">
+  Agent budget in lamports
+</ParamField>
+
+<ParamField body="autonomy" type="object">
+  Autonomous execution configuration (see Autonomy Config)
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="string" required>
+  Agent UUID
+</ResponseField>
+
+<ResponseField name="name" type="string" required>
+  Agent name
+</ResponseField>
+
+<ResponseField name="walletId" type="string" required>
+  Wallet UUID
+</ResponseField>
+
+<ResponseField name="status" type="enum" required>
+  `stopped`, `running`, or `paused`
+</ResponseField>
+
+<ResponseField name="executionMode" type="enum" required>
+  `autonomous` or `supervised`
+</ResponseField>
+
+<ResponseField name="allowedIntents" type="array" required>
+  Array of allowed transaction types
+</ResponseField>
+
+<ResponseField name="budgetLamports" type="number">
+  Agent budget
+</ResponseField>
+
+<ResponseField name="createdAt" type="string" required>
+  ISO 8601 timestamp
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string" required>
+  ISO 8601 timestamp
+</ResponseField>
+
+---
+
+## Autonomy Configuration
+
+For autonomous agents, configure decision rules and scheduled steps:
+
+```json
+{
+  "name": "Autonomous Trader",
+  "executionMode": "autonomous",
+  "autonomy": {
+    "enabled": true,
+    "mode": "execute",
+    "cadenceSeconds": 30,
+    "maxActionsPerHour": 60,
+    "steps": [
+      {
+        "id": "periodic-balance-check",
+        "type": "query_balance",
+        "protocol": "system-program",
+        "intent": {},
+        "cooldownSeconds": 60,
+        "maxRuns": 100
+      }
+    ],
+    "rules": [
+      {
+        "id": "low-balance-alert",
+        "when": [
+          {"metric": "balance_lamports", "op": "lt", "value": 1000000}
+        ],
+        "then": {
+          "type": "query_balance",
+          "protocol": "system-program",
+          "intent": {}
+        },
+        "cooldownSeconds": 300
+      }
+    ]
+  }
+}
+```
+
+<Expandable title="Autonomy Fields">
+  <ParamField body="enabled" type="boolean" default={false}>
+    Enable autonomous execution
+  </ParamField>
+  
+  <ParamField body="mode" type="enum" default="execute">
+    `execute` (real) or `paper` (simulation)
+  </ParamField>
+  
+  <ParamField body="cadenceSeconds" type="number" default={30}>
+    Heartbeat interval (1-86400)
+  </ParamField>
+  
+  <ParamField body="maxActionsPerHour" type="number" default={60}>
+    Maximum actions per hour (1-3600)
+  </ParamField>
+  
+  <ParamField body="steps" type="array">
+    Array of scheduled execution steps
+  </ParamField>
+  
+  <ParamField body="rules" type="array">
+    Array of condition-based decision rules
+  </ParamField>
+</Expandable>
+
+---
+
+## List Agents
+
+List all agents.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/agents
+```
+
+---
+
+## Get Agent
+
+Retrieve agent details.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/agents/123e4567-e89b-12d3-a456-426614174000
+```
+
+### Path Parameters
+
+<ParamField path="agentId" type="string" required>
+  Agent UUID
+</ParamField>
+
+---
+
+## Update Agent Capabilities
+
+Update agent's allowed intents and execution mode.
+
+```bash cURL
+curl -X PUT \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "allowedIntents": ["transfer_sol", "swap", "stake", "query_balance"],
+    "executionMode": "supervised",
+    "budgetLamports": 200000000
+  }' \
+  http://localhost:3000/api/v1/agents/123e4567-e89b-12d3-a456-426614174000/capabilities
+```
+
+### Path Parameters
+
+<ParamField path="agentId" type="string" required>
+  Agent UUID
+</ParamField>
+
+### Request Body
+
+<ParamField body="allowedIntents" type="array" required>
+  Updated array of allowed transaction types
+</ParamField>
+
+<ParamField body="executionMode" type="enum">
+  `autonomous` or `supervised`
+</ParamField>
+
+<ParamField body="autonomy" type="object">
+  Updated autonomy configuration
+</ParamField>
+
+<ParamField body="budgetLamports" type="number">
+  Updated budget
+</ParamField>
+
+---
+
+## Start Agent
+
+Start a stopped agent.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  http://localhost:3000/api/v1/agents/123e4567-e89b-12d3-a456-426614174000/start
+```
+
+### Path Parameters
+
+<ParamField path="agentId" type="string" required>
+  Agent UUID
+</ParamField>
+
+---
+
+## Stop Agent
+
+Stop a running agent.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  http://localhost:3000/api/v1/agents/123e4567-e89b-12d3-a456-426614174000/stop
+```
+
+### Path Parameters
+
+<ParamField path="agentId" type="string" required>
+  Agent UUID
+</ParamField>
+
+---
+
+## Pause Agent
+
+Pause a running agent with optional reason.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"reason": "Manual review required"}' \
+  http://localhost:3000/api/v1/agents/123e4567-e89b-12d3-a456-426614174000/pause
+```
+
+### Path Parameters
+
+<ParamField path="agentId" type="string" required>
+  Agent UUID
+</ParamField>
+
+### Request Body
+
+<ParamField body="reason" type="string">
+  Reason for pausing
+</ParamField>
+
+---
+
+## Resume Agent
+
+Resume a paused agent.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  http://localhost:3000/api/v1/agents/123e4567-e89b-12d3-a456-426614174000/resume
+```
+
+### Path Parameters
+
+<ParamField path="agentId" type="string" required>
+  Agent UUID
+</ParamField>
+
+---
+
+## Get Agent Budget
+
+Retrieve agent budget and spending information.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/agents/123e4567-e89b-12d3-a456-426614174000/budget
+```
+
+### Path Parameters
+
+<ParamField path="agentId" type="string" required>
+  Agent UUID
+</ParamField>
+
+### Response
+
+<ResponseField name="agentId" type="string" required>
+  Agent UUID
+</ResponseField>
+
+<ResponseField name="walletId" type="string" required>
+  Wallet UUID
+</ResponseField>
+
+<ResponseField name="budgetLamports" type="number" required>
+  Total budget in lamports
+</ResponseField>
+
+<ResponseField name="spentLamportsToday" type="number" required>
+  Amount spent in current 24-hour period
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string" required>
+  ISO 8601 timestamp
+</ResponseField>
+
+```json
+{
+  "status": "success",
+  "data": {
+    "agentId": "123e4567-e89b-12d3-a456-426614174000",
+    "walletId": "550e8400-e29b-41d4-a716-446655440000",
+    "budgetLamports": 100000000,
+    "spentLamportsToday": 5000000,
+    "updatedAt": "2026-03-08T12:00:00.000Z"
+  }
+}
+```
+
+---
+
+## Get Autonomy State
+
+Retrieve current autonomous execution state.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/agents/123e4567-e89b-12d3-a456-426614174000/autonomy/state
+```
+
+### Path Parameters
+
+<ParamField path="agentId" type="string" required>
+  Agent UUID
+</ParamField>
+
+---
+
+## Issue Capability Manifest
+
+Issue a signed capability manifest for an agent.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "allowedIntents": ["transfer_sol", "swap"],
+    "allowedProtocols": ["system-program", "jupiter"],
+    "ttlSeconds": 3600
+  }' \
+  http://localhost:3000/api/v1/agents/123e4567-e89b-12d3-a456-426614174000/manifest/issue
+```
+
+### Path Parameters
+
+<ParamField path="agentId" type="string" required>
+  Agent UUID
+</ParamField>
+
+### Request Body
+
+<ParamField body="allowedIntents" type="array" required>
+  Array of transaction types the manifest allows
+</ParamField>
+
+<ParamField body="allowedProtocols" type="array" required>
+  Array of protocols the manifest allows
+</ParamField>
+
+<ParamField body="ttlSeconds" type="number" default={3600}>
+  Manifest validity duration in seconds (max: 2,592,000 / 30 days)
+</ParamField>
+
+### Response
+
+<ResponseField name="issuer" type="string" required>
+  Manifest issuer identifier
+</ResponseField>
+
+<ResponseField name="version" type="string" required>
+  Manifest version
+</ResponseField>
+
+<ResponseField name="agentId" type="string" required>
+  Agent UUID
+</ResponseField>
+
+<ResponseField name="allowedIntents" type="array" required>
+  Allowed transaction types
+</ResponseField>
+
+<ResponseField name="allowedProtocols" type="array" required>
+  Allowed protocols
+</ResponseField>
+
+<ResponseField name="issuedAt" type="string" required>
+  ISO 8601 timestamp
+</ResponseField>
+
+<ResponseField name="expiresAt" type="string" required>
+  ISO 8601 timestamp
+</ResponseField>
+
+<ResponseField name="nonce" type="string" required>
+  Unique nonce
+</ResponseField>
+
+<ResponseField name="signature" type="string" required>
+  Manifest signature
+</ResponseField>
+
+---
+
+## Verify Capability Manifest
+
+Verify a capability manifest signature and validity.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "manifest": {
+      "issuer": "agentic-wallet-runtime",
+      "version": "1.0.0",
+      "agentId": "123e4567-e89b-12d3-a456-426614174000",
+      "allowedIntents": ["transfer_sol"],
+      "allowedProtocols": ["system-program"],
+      "issuedAt": "2026-03-08T12:00:00.000Z",
+      "expiresAt": "2026-03-08T13:00:00.000Z",
+      "nonce": "abc123def456",
+      "signature": "sig..."
+    }
+  }' \
+  http://localhost:3000/api/v1/agents/123e4567-e89b-12d3-a456-426614174000/manifest/verify
+```
+
+### Path Parameters
+
+<ParamField path="agentId" type="string" required>
+  Agent UUID
+</ParamField>
+
+### Request Body
+
+<ParamField body="manifest" type="object" required>
+  Complete capability manifest object
+</ParamField>
+
+### Response
+
+```json
+{
+  "status": "success",
+  "data": {
+    "valid": true,
+    "reason": "Manifest is valid and not expired"
+  }
+}
+```
+
+---
+
+## Execute Agent Intent
+
+Execute a transaction intent on behalf of an agent.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "type": "transfer_sol",
+    "protocol": "system-program",
+    "intent": {
+      "destination": "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy",
+      "lamports": 1000000
+    },
+    "gasless": false
+  }' \
+  http://localhost:3000/api/v1/agents/123e4567-e89b-12d3-a456-426614174000/execute
+```
+
+### Path Parameters
+
+<ParamField path="agentId" type="string" required>
+  Agent UUID
+</ParamField>
+
+### Request Body
+
+<ParamField body="type" type="enum" required>
+  Transaction type (must be in agent's `allowedIntents`)
+</ParamField>
+
+<ParamField body="protocol" type="string" required>
+  Protocol name
+</ParamField>
+
+<ParamField body="intent" type="object" default="{}">
+  Protocol-specific intent payload
+</ParamField>
+
+<ParamField body="gasless" type="boolean" default={false}>
+  Use gasless submission if supported
+</ParamField>
+
+### Response
+
+Returns a transaction object (same as POST /api/v1/transactions).
+
+<Info>
+  This endpoint enforces agent capabilities, budget limits, and policy rules.
+</Info>
+
+---
+
+## Agent Execution Modes
+
+<Tabs>
+  <Tab title="Autonomous">
+    **Autonomous Mode**
+    
+    Agent executes based on configured rules and steps without manual intervention.
+    
+    **Features:**
+    - Scheduled steps with cooldown periods
+    - Conditional decision rules
+    - Rate limiting (maxActionsPerHour)
+    - Budget enforcement
+    - Policy evaluation
+    - Execute or paper mode
+    
+    **Use Cases:**
+    - Automated trading bots
+    - Rebalancing agents
+    - Liquidity providers
+    - Monitoring agents
+  </Tab>
+  <Tab title="Supervised">
+    **Supervised Mode**
+    
+    Agent requires explicit execution calls via the API.
+    
+    **Features:**
+    - Manual intent execution
+    - Policy evaluation
+    - Budget enforcement
+    - Capability restrictions
+    
+    **Use Cases:**
+    - User-controlled agents
+    - Multi-approval workflows
+    - High-value operations
+    - Testing and development
+  </Tab>
+</Tabs>
+
+---
+
+## Treasury Operations
+
+See [Treasury API](/api/treasury) for agent budget allocation and rebalancing.
+
+---
+
+## Strategy Operations
+
+Backtest and paper trading for agents:
+
+### Backtest Strategy
+
+```bash
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "walletId": "550e8400-e29b-41d4-a716-446655440000",
+    "name": "Test Strategy",
+    "minimumPassRate": 0.7,
+    "steps": [
+      {
+        "type": "query_balance",
+        "protocol": "system-program",
+        "intent": {},
+        "timestamp": "2026-03-08T12:00:00.000Z"
+      }
+    ]
+  }' \
+  http://localhost:3000/api/v1/strategy/backtest
+```
+
+### Execute Paper Trade
+
+```bash
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "agentId": "123e4567-e89b-12d3-a456-426614174000",
+    "walletId": "550e8400-e29b-41d4-a716-446655440000",
+    "type": "swap",
+    "protocol": "jupiter",
+    "intent": {
+      "inputMint": "So11111111111111111111111111111111111111112",
+      "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "amount": "1000000",
+      "slippageBps": 50
+    }
+  }' \
+  http://localhost:3000/api/v1/strategy/paper/execute
+```
+
+### List Paper Trades
+
+```bash
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/strategy/paper/123e4567-e89b-12d3-a456-426614174000
+```

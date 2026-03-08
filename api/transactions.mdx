@@ -1,0 +1,474 @@
+---
+title: 'Transactions'
+description: 'Transaction creation, execution, and management'
+icon: 'arrow-right-arrow-left'
+---
+
+## Create Transaction
+
+Create and execute a new transaction through the full pipeline.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "walletId": "550e8400-e29b-41d4-a716-446655440000",
+    "type": "transfer_sol",
+    "protocol": "system-program",
+    "intent": {
+      "destination": "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy",
+      "lamports": 1000000
+    }
+  }' \
+  http://localhost:3000/api/v1/transactions
+```
+
+### Request Body
+
+<ParamField body="walletId" type="string" required>
+  Wallet UUID executing the transaction
+</ParamField>
+
+<ParamField body="type" type="enum" required>
+  Transaction type: `transfer_sol`, `transfer_spl`, `swap`, `stake`, `unstake`, `lend_supply`, `lend_borrow`, `create_mint`, `mint_token`, `query_balance`, `query_positions`, `create_escrow`, `accept_escrow`, `release_escrow`, `refund_escrow`, `dispute_escrow`, `resolve_dispute`, `create_milestone_escrow`, `release_milestone`, `x402_pay`, `flash_loan_bundle`, `cpi_call`, `custom_instruction_bundle`, `treasury_allocate`, `treasury_rebalance`, `paper_trade`
+</ParamField>
+
+<ParamField body="protocol" type="string" required>
+  Protocol name: `system-program`, `spl-token`, `jupiter`, `marinade`, `solend`, `metaplex`, `orca`, `raydium`, `escrow`
+</ParamField>
+
+<ParamField body="intent" type="object">
+  Protocol-specific intent payload (see examples below)
+</ParamField>
+
+<ParamField body="agentId" type="string">
+  Optional agent UUID if executed by an agent
+</ParamField>
+
+<ParamField body="gasless" type="boolean" default={false}>
+  Use gasless transaction submission (if supported by protocol)
+</ParamField>
+
+<ParamField body="idempotencyKey" type="string">
+  Unique key (8-128 chars) to prevent duplicate transactions
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="string" required>
+  Transaction UUID
+</ResponseField>
+
+<ResponseField name="walletId" type="string" required>
+  Wallet UUID
+</ResponseField>
+
+<ResponseField name="agentId" type="string">
+  Agent UUID if executed by agent
+</ResponseField>
+
+<ResponseField name="type" type="string" required>
+  Transaction type
+</ResponseField>
+
+<ResponseField name="protocol" type="string" required>
+  Protocol name
+</ResponseField>
+
+<ResponseField name="status" type="enum" required>
+  Current status: `pending`, `simulating`, `policy_eval`, `approval_gate`, `signing`, `submitting`, `confirmed`, `failed`
+</ResponseField>
+
+<ResponseField name="stage" type="string" required>
+  Current pipeline stage
+</ResponseField>
+
+<ResponseField name="signature" type="string">
+  On-chain transaction signature (once submitted)
+</ResponseField>
+
+<ResponseField name="intent" type="object">
+  Original intent payload
+</ResponseField>
+
+<ResponseField name="policyDecision" type="object">
+  Policy evaluation result
+  <Expandable title="properties">
+    <ResponseField name="decision" type="enum">
+      `allow`, `deny`, or `require_approval`
+    </ResponseField>
+    <ResponseField name="reasons" type="array">
+      Array of reason strings
+    </ResponseField>
+    <ResponseField name="riskTier" type="enum">
+      `low`, `medium`, `high`, or `critical`
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+<ResponseField name="createdAt" type="string" required>
+  ISO 8601 timestamp
+</ResponseField>
+
+<ResponseField name="updatedAt" type="string" required>
+  ISO 8601 timestamp
+</ResponseField>
+
+### Transaction Lifecycle
+
+Transactions progress through these stages:
+
+```
+pending → simulating → policy_eval → approval_gate → signing → submitting → confirmed
+                                  ↓                                       ↓
+                                  └──────────────→ failed ←──────────────┘
+```
+
+<Info>
+  Poll the transaction status until it reaches `confirmed` or `failed`.
+</Info>
+
+---
+
+## Intent Examples
+
+<Tabs>
+  <Tab title="Transfer SOL">
+    ```json
+    {
+      "walletId": "550e8400-e29b-41d4-a716-446655440000",
+      "type": "transfer_sol",
+      "protocol": "system-program",
+      "intent": {
+        "destination": "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy",
+        "lamports": 1000000
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Transfer SPL Token">
+    ```json
+    {
+      "walletId": "550e8400-e29b-41d4-a716-446655440000",
+      "type": "transfer_spl",
+      "protocol": "spl-token",
+      "intent": {
+        "destination": "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy",
+        "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "1000000"
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Swap (Jupiter)">
+    ```json
+    {
+      "walletId": "550e8400-e29b-41d4-a716-446655440000",
+      "type": "swap",
+      "protocol": "jupiter",
+      "intent": {
+        "inputMint": "So11111111111111111111111111111111111111112",
+        "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "1000000",
+        "slippageBps": 50
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Stake (Marinade)">
+    ```json
+    {
+      "walletId": "550e8400-e29b-41d4-a716-446655440000",
+      "type": "stake",
+      "protocol": "marinade",
+      "intent": {
+        "amount": "1000000000"
+      }
+    }
+    ```
+  </Tab>
+  <Tab title="Query Balance">
+    ```json
+    {
+      "walletId": "550e8400-e29b-41d4-a716-446655440000",
+      "type": "query_balance",
+      "protocol": "system-program",
+      "intent": {}
+    }
+    ```
+    
+    <Note>
+      Read-only queries don't produce on-chain signatures but still go through policy evaluation.
+    </Note>
+  </Tab>
+</Tabs>
+
+---
+
+## Get Transaction
+
+Retrieve transaction details and current status.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/transactions/123e4567-e89b-12d3-a456-426614174000
+```
+
+### Path Parameters
+
+<ParamField path="txId" type="string" required>
+  Transaction UUID
+</ParamField>
+
+---
+
+## List Wallet Transactions
+
+List all transactions for a wallet.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     "http://localhost:3000/api/v1/wallets/550e8400-e29b-41d4-a716-446655440000/transactions?limit=20"
+```
+
+### Path Parameters
+
+<ParamField path="walletId" type="string" required>
+  Wallet UUID
+</ParamField>
+
+### Query Parameters
+
+<ParamField query="limit" type="number" default="50">
+  Maximum transactions to return
+</ParamField>
+
+<ParamField query="offset" type="number" default="0">
+  Number of transactions to skip
+</ParamField>
+
+<ParamField query="status" type="string">
+  Filter by status: `pending`, `confirmed`, `failed`
+</ParamField>
+
+---
+
+## Retry Transaction
+
+Retry a failed transaction with fresh blockhash and updated fees.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  http://localhost:3000/api/v1/transactions/123e4567-e89b-12d3-a456-426614174000/retry
+```
+
+### Path Parameters
+
+<ParamField path="txId" type="string" required>
+  Transaction UUID
+</ParamField>
+
+<Info>
+  Retry automatically handles re-simulation, fresh blockhash, and priority fee updates.
+</Info>
+
+---
+
+## Approve Transaction
+
+Approve a transaction paused at `approval_gate`.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  http://localhost:3000/api/v1/transactions/123e4567-e89b-12d3-a456-426614174000/approve
+```
+
+### Path Parameters
+
+<ParamField path="txId" type="string" required>
+  Transaction UUID
+</ParamField>
+
+---
+
+## Reject Transaction
+
+Reject a transaction paused at `approval_gate`.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  http://localhost:3000/api/v1/transactions/123e4567-e89b-12d3-a456-426614174000/reject
+```
+
+### Path Parameters
+
+<ParamField path="txId" type="string" required>
+  Transaction UUID
+</ParamField>
+
+---
+
+## Get Transaction Proof
+
+Retrieve cryptographic proof of transaction execution.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/transactions/123e4567-e89b-12d3-a456-426614174000/proof
+```
+
+### Response
+
+<ResponseField name="txId" type="string" required>
+  Transaction UUID
+</ResponseField>
+
+<ResponseField name="walletId" type="string" required>
+  Wallet UUID
+</ResponseField>
+
+<ResponseField name="agentId" type="string">
+  Agent UUID if executed by agent
+</ResponseField>
+
+<ResponseField name="intentHash" type="string" required>
+  SHA-256 hash of intent payload (64 hex chars)
+</ResponseField>
+
+<ResponseField name="policyHash" type="string" required>
+  SHA-256 hash of policy evaluation (64 hex chars)
+</ResponseField>
+
+<ResponseField name="simulationHash" type="string" required>
+  SHA-256 hash of simulation result (64 hex chars)
+</ResponseField>
+
+<ResponseField name="signature" type="string">
+  On-chain transaction signature
+</ResponseField>
+
+<ResponseField name="proofHash" type="string" required>
+  SHA-256 hash of complete proof (64 hex chars)
+</ResponseField>
+
+<ResponseField name="createdAt" type="string" required>
+  ISO 8601 timestamp
+</ResponseField>
+
+```json
+{
+  "status": "success",
+  "data": {
+    "txId": "123e4567-e89b-12d3-a456-426614174000",
+    "walletId": "550e8400-e29b-41d4-a716-446655440000",
+    "intentHash": "a1b2c3d4e5f67890abcdef1234567890abcdef1234567890abcdef1234567890",
+    "policyHash": "b2c3d4e5f6a78901bcdef0123456789abcdef0123456789abcdef01234567891",
+    "simulationHash": "c3d4e5f6a7b89012cdef01234567890abcdef01234567890abcdef012345678902",
+    "signature": "5j7s...",
+    "proofHash": "d4e5f6a7b8c90123def012345678901abcdef012345678901abcdef01234567903",
+    "createdAt": "2026-03-08T12:00:00.000Z"
+  }
+}
+```
+
+---
+
+## Get Transaction Replay
+
+Retrieve complete transaction replay data for auditing.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/transactions/123e4567-e89b-12d3-a456-426614174000/replay
+```
+
+### Response
+
+Returns full transaction state including:
+- Original intent
+- Policy evaluation details
+- Simulation results
+- Stage history
+- Timestamps
+
+---
+
+## Get Pending Approvals
+
+List transactions awaiting approval for a wallet.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/wallets/550e8400-e29b-41d4-a716-446655440000/pending-approvals
+```
+
+### Path Parameters
+
+<ParamField path="walletId" type="string" required>
+  Wallet UUID
+</ParamField>
+
+---
+
+## Get Wallet Positions
+
+Query protocol positions (staking, lending, LP) for a wallet.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/wallets/550e8400-e29b-41d4-a716-446655440000/positions
+```
+
+### Path Parameters
+
+<ParamField path="walletId" type="string" required>
+  Wallet UUID
+</ParamField>
+
+---
+
+## Get Wallet Escrows
+
+List escrow accounts associated with a wallet.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/wallets/550e8400-e29b-41d4-a716-446655440000/escrows
+```
+
+### Path Parameters
+
+<ParamField path="walletId" type="string" required>
+  Wallet UUID
+</ParamField>
+
+---
+
+## Transaction Health Check
+
+Check transaction engine health and RPC pool status.
+
+```bash cURL
+curl http://localhost:3006/health
+```
+
+### Response
+
+```json
+{
+  "status": "ok",
+  "rpcPool": {
+    "healthy": 3,
+    "total": 3
+  },
+  "outbox": {
+    "pending": 2,
+    "processing": 1
+  },
+  "timestamp": "2026-03-08T12:00:00.000Z"
+}
+```

@@ -1,0 +1,416 @@
+---
+title: 'Escrow Program'
+description: 'Deploy and use the on-chain Anchor escrow program for trustless payments'
+icon: 'lock'
+---
+
+The Agentic Wallet includes a production-ready Anchor program that implements a full-featured escrow system on Solana. This enables trustless payments, milestone-based releases, and dispute resolution.
+
+## Overview
+
+The escrow program is a real Anchor smart contract (not a memo placeholder) that supports:
+
+- **Standard Escrow**: Two-party escrow with arbiter support
+- **Milestone Escrow**: Multi-phase payment releases
+- **x402 Protocol**: HTTP 402 payment-required integration
+- **Dispute Resolution**: Third-party arbiter workflow
+- **Auto-release**: Time-based automatic releases
+
+<Note>
+The program source code is in `programs/escrow/src/lib.rs` and uses PDAs (Program Derived Addresses) for secure state management.
+</Note>
+
+## Building and Deploying
+
+### Prerequisites
+
+- Anchor CLI >= 0.31
+- Solana CLI >= 1.18
+- Funded devnet wallet (set via `PRIVATE_KEY` in `.env`)
+
+### Build the Program
+
+<Steps>
+  <Step title="Build escrow contract">
+    ```bash
+    npm run escrow:build
+    ```
+    
+    This compiles the Anchor program and generates the IDL.
+  </Step>
+
+  <Step title="Deploy to devnet">
+    ```bash
+    npm run escrow:deploy:devnet
+    ```
+    
+    This command:
+    1. Syncs `declare_id!` in the Rust code with your deploy keypair
+    2. Builds and deploys via Anchor
+    3. Updates `.env` with `ESCROW_PROGRAM_ID=<deployed_id>`
+  </Step>
+
+  <Step title="Verify deployment">
+    ```bash
+    curl -H 'x-api-key: dev-api-key' http://localhost:3000/api/v1/protocols/escrow/health
+    ```
+    
+    Expected response:
+    ```json
+    {
+      "ok": true,
+      "configured": true,
+      "deployed": true,
+      "programId": "7U9zNRhvzTSnA7jQmUbVf9bT4Vg41qF6yJaXU5J6tCGC"
+    }
+    ```
+  </Step>
+</Steps>
+
+## Escrow Operations
+
+All escrow operations are accessible via intents through the `escrow` protocol adapter.
+
+### Create Escrow
+
+Initialize a new escrow account with funds locked from the creator.
+
+```bash
+npm run intent-runner -- --intent '{
+  "type": "create_escrow",
+  "walletId": "<creator-wallet-id>",
+  "protocol": "escrow",
+  "intent": {
+    "escrowNumericId": "900001",
+    "counterparty": "<recipient-pubkey>",
+    "creator": "<creator-pubkey>",
+    "arbiter": "<arbiter-pubkey>",
+    "feeRecipient": "<fee-recipient-pubkey>",
+    "amount": "10000000",
+    "deadlineUnixSec": 4102444800,
+    "terms": "Devnet escrow test"
+  }
+}'
+```
+
+<Accordion title="Intent Parameters">
+  - `escrowNumericId`: Unique numeric identifier for this escrow (used in PDA derivation)
+  - `counterparty`: Recipient public key
+  - `creator`: Creator public key (must match wallet)
+  - `arbiter`: Third-party arbiter for disputes
+  - `feeRecipient`: Address to receive protocol fees
+  - `amount`: Lamports to lock in escrow
+  - `deadlineUnixSec`: Unix timestamp deadline
+  - `terms`: Human-readable terms (hashed on-chain)
+</Accordion>
+
+### Accept Escrow
+
+The recipient accepts the escrow, moving it from `Created` to `Active` status.
+
+```bash
+npm run intent-runner -- --intent '{
+  "type": "accept_escrow",
+  "walletId": "<recipient-wallet-id>",
+  "protocol": "escrow",
+  "intent": {
+    "escrowNumericId": "900001",
+    "creator": "<creator-pubkey>"
+  }
+}'
+```
+
+<Warning>
+Acceptance must occur before the deadline, or the escrow cannot transition to `Active`.
+</Warning>
+
+### Release Escrow
+
+The creator releases funds to the recipient after work is completed.
+
+```bash
+npm run intent-runner -- --intent '{
+  "type": "release_escrow",
+  "walletId": "<creator-wallet-id>",
+  "protocol": "escrow",
+  "intent": {
+    "escrowNumericId": "900001",
+    "creator": "<creator-pubkey>",
+    "counterparty": "<recipient-pubkey>",
+    "feeRecipient": "<fee-recipient-pubkey>"
+  }
+}'
+```
+
+Fees are automatically deducted based on `fee_basis_points` (e.g., 100 = 1%).
+
+### Refund Escrow
+
+The creator can request a refund under specific conditions:
+
+- **Before acceptance**: Cancels the escrow (status → `Cancelled`)
+- **After deadline expiry**: Refunds the creator (status → `Refunded`)
+
+```bash
+npm run intent-runner -- --intent '{
+  "type": "refund_escrow",
+  "walletId": "<creator-wallet-id>",
+  "protocol": "escrow",
+  "intent": {
+    "escrowNumericId": "900001",
+    "creator": "<creator-pubkey>"
+  }
+}'
+```
+
+### Dispute Escrow
+
+Either party can open a dispute during the `Active` phase.
+
+```bash
+npm run intent-runner -- --intent '{
+  "type": "dispute_escrow",
+  "walletId": "<disputer-wallet-id>",
+  "protocol": "escrow",
+  "intent": {
+    "escrowNumericId": "900001",
+    "creator": "<creator-pubkey>",
+    "reason": "Work not completed as agreed"
+  }
+}'
+```
+
+### Resolve Dispute
+
+The arbiter decides the winner and distributes funds accordingly.
+
+```bash
+npm run intent-runner -- --intent '{
+  "type": "resolve_dispute",
+  "walletId": "<arbiter-wallet-id>",
+  "protocol": "escrow",
+  "intent": {
+    "escrowNumericId": "900001",
+    "creator": "<creator-pubkey>",
+    "counterparty": "<recipient-pubkey>",
+    "feeRecipient": "<fee-recipient-pubkey>",
+    "winner": "recipient"
+  }
+}'
+```
+
+<Accordion title="Winner Options">
+  - `creator`: Full refund to creator
+  - `recipient`: Payout to recipient (minus fees)
+</Accordion>
+
+## Milestone Escrow
+
+For multi-phase projects, use milestone escrows to release funds incrementally.
+
+### Create Milestone Escrow
+
+```bash
+npm run intent-runner -- --intent '{
+  "type": "create_milestone_escrow",
+  "walletId": "<creator-wallet-id>",
+  "protocol": "escrow",
+  "intent": {
+    "escrowNumericId": "900002",
+    "counterparty": "<recipient-pubkey>",
+    "creator": "<creator-pubkey>",
+    "arbiter": "<arbiter-pubkey>",
+    "feeRecipient": "<fee-recipient-pubkey>",
+    "amount": "50000000",
+    "deadlineUnixSec": 4102444800,
+    "terms": "5-milestone project"
+  }
+}'
+```
+
+### Release Individual Milestone
+
+```bash
+npm run intent-runner -- --intent '{
+  "type": "release_milestone",
+  "walletId": "<creator-wallet-id>",
+  "protocol": "escrow",
+  "intent": {
+    "escrowNumericId": "900002",
+    "creator": "<creator-pubkey>",
+    "counterparty": "<recipient-pubkey>",
+    "feeRecipient": "<fee-recipient-pubkey>",
+    "milestoneIndex": 0
+  }
+}'
+```
+
+## x402 Protocol Integration
+
+The `x402_pay` instruction enables HTTP 402 (Payment Required) workflows.
+
+```bash
+npm run intent-runner -- --intent '{
+  "type": "x402_pay",
+  "walletId": "<payer-wallet-id>",
+  "protocol": "escrow",
+  "intent": {
+    "escrowNumericId": "900003",
+    "counterparty": "<service-provider-pubkey>",
+    "creator": "<payer-pubkey>",
+    "arbiter": "<arbiter-pubkey>",
+    "feeRecipient": "<fee-recipient-pubkey>",
+    "amount": "1000000",
+    "deadlineUnixSec": 1735689600,
+    "terms": "API access payment"
+  }
+}'
+```
+
+<Note>
+The `is_x402` flag in the on-chain state enables special handling for HTTP payment flows.
+</Note>
+
+## Querying Escrow State
+
+### List Wallet Escrows
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/wallets/<wallet-id>/escrows
+```
+
+### Check Transaction Proof
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/transactions/<tx-id>/proof
+```
+
+Returns:
+- `intentHash`: Hash of the original intent
+- `policyHash`: Policy evaluation fingerprint
+- `simulationHash`: Pre-flight simulation result
+- `proofHash`: Combined cryptographic proof
+- Transaction signature and explorer link
+
+## On-Chain Program Details
+
+### Account Structure
+
+```rust
+pub struct EscrowAccount {
+    pub creator: Pubkey,
+    pub recipient: Pubkey,
+    pub arbiter: Pubkey,
+    pub fee_recipient: Pubkey,
+    pub amount: u64,
+    pub status: EscrowStatus,
+    pub deadline: i64,
+    pub terms_hash: [u8; 32],
+    pub fee_basis_points: u16,
+    pub created_at: i64,
+    pub escrow_id: u64,
+    pub bump: u8,
+    pub dispute_reason: [u8; 64],
+    pub auto_release_at: i64,
+    pub is_milestone: bool,
+    pub is_x402: bool,
+}
+```
+
+### Status Lifecycle
+
+<Steps>
+  <Step title="Created">
+    Initial state after `create_escrow`. Funds locked, awaiting recipient acceptance.
+  </Step>
+  
+  <Step title="Active">
+    Recipient has accepted. Creator can release, or either party can dispute.
+  </Step>
+  
+  <Step title="Disputed">
+    Dispute opened. Only arbiter can resolve.
+  </Step>
+  
+  <Step title="Completed">
+    Funds released to recipient. Escrow closed.
+  </Step>
+  
+  <Step title="Refunded">
+    Funds returned to creator after deadline. Escrow closed.
+  </Step>
+  
+  <Step title="Cancelled">
+    Creator cancelled before acceptance. Escrow closed.
+  </Step>
+  
+  <Step title="Resolved">
+    Arbiter resolved dispute. Escrow closed.
+  </Step>
+</Steps>
+
+### PDA Derivation
+
+Escrow accounts use Program Derived Addresses:
+
+```rust
+seeds = [b"escrow", creator.key().as_ref(), &escrow_id.to_le_bytes()]
+```
+
+This ensures deterministic addresses and prevents collisions.
+
+## CLI Integration
+
+For interactive escrow workflows:
+
+```bash
+npm run cli -- interactive
+```
+
+Select **Protocol Interaction** → **Escrow** and follow the prompts for:
+- Creating escrows
+- Accepting tasks
+- Releasing payments
+- Handling disputes
+
+## Security Considerations
+
+<Warning>
+**Production Checklist:**
+- Deploy program with a dedicated upgrade authority
+- Use hardware wallets for arbiter keys
+- Set reasonable fee caps (max 1000 basis points = 10%)
+- Validate all public keys before submission
+- Monitor program logs for anomalies
+</Warning>
+
+### Fee Safety
+
+The program enforces:
+```rust
+require!(fee_basis_points <= 1000, EscrowError::FeeTooHigh);
+```
+
+This caps fees at 10%.
+
+### Deadline Validation
+
+```rust
+require!(deadline > clock.unix_timestamp, EscrowError::DeadlineExpired);
+```
+
+Prevents creating escrows with past deadlines.
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Multi-Agent Orchestration" icon="users" href="/guides/multi-agent-orchestration">
+    Coordinate escrow operations across multiple agents
+  </Card>
+  
+  <Card title="Gasless Transactions" icon="bolt" href="/guides/gasless-transactions">
+    Enable gasless escrow operations via Kora RPC
+  </Card>
+</CardGroup>

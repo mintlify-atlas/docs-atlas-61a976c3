@@ -1,0 +1,623 @@
+---
+title: Policy Enforcement
+description: Policy evaluation flow, rule types, and approval gate workflow
+---
+
+## Policy Evaluation Flow
+
+All **spend-capable intents** pass through policy evaluation before signing. This ensures that even autonomous agents operate within defined safety boundaries.
+
+<Steps>
+  <Step title="Intent Submission">
+    Agent or client submits transaction intent:
+    ```http
+    POST /api/v1/transactions
+    {
+      "walletId": "uuid",
+      "type": "transfer_sol",
+      "protocol": "system-program",
+      "intent": {
+        "destination": "8xW...",
+        "lamports": 1000000
+      }
+    }
+    ```
+  </Step>
+  <Step title="Schema Validation">
+    Gateway validates request against Zod schemas in `packages/common`
+  </Step>
+  <Step title="Transaction Creation">
+    Transaction-engine creates transaction record in `pending` status
+  </Step>
+  <Step title="Build & Simulate">
+    Protocol adapter builds transaction, RPC pool simulates execution
+  </Step>
+  <Step title="Policy Evaluation">
+    Transaction transitions to `policy_eval` status:
+    ```http
+    POST http://localhost:3003/evaluate
+    {
+      "walletId": "uuid",
+      "type": "transfer_sol",
+      "protocol": "system-program",
+      "amountLamports": 1000000,
+      "destination": "8xW...",
+      "programIds": ["11111111111111111111111111111111"]
+    }
+    ```
+  </Step>
+  <Step title="Rule Evaluation">
+    Policy engine loads all active policies for wallet and evaluates each rule
+  </Step>
+  <Step title="Decision Output">
+    Policy engine returns one of three decisions:
+    - `allow`: Proceed to signing
+    - `deny`: Reject transaction immediately
+    - `require_approval`: Pause at approval gate
+  </Step>
+  <Step title="Signing or Approval Gate">
+    - If `allow`: Transaction proceeds to `signing` status
+    - If `deny`: Transaction fails with `status=failed`
+    - If `require_approval`: Transaction pauses at `approval_gate` status
+  </Step>
+</Steps>
+
+<Note>
+  Read-only intents like `query_balance` and `query_positions` skip policy evaluation and signing, confirming immediately after simulation.
+</Note>
+
+## Policy Decision Types
+
+The policy engine returns structured decisions:
+
+```typescript
+// From packages/common/src/schemas/policy.ts
+
+export interface PolicyDecision {
+  decision: 'allow' | 'deny' | 'require_approval';
+  reasons: string[];
+  riskTier: 'low' | 'medium' | 'high' | 'critical';
+}
+```
+
+### Allow
+
+**Transaction proceeds to signing** without human intervention.
+
+- All policy rules passed
+- Risk tier is acceptable
+- No approval thresholds exceeded
+
+Example response:
+```json
+{
+  "decision": "allow",
+  "reasons": [],
+  "riskTier": "low"
+}
+```
+
+### Deny
+
+**Transaction rejected immediately**, never reaches signing stage.
+
+- At least one policy rule failed with hard constraint
+- Transaction fails with `errorCode: "POLICY_VIOLATION"`
+- Reason strings explain which rule(s) failed
+
+Example response:
+```json
+{
+  "decision": "deny",
+  "reasons": [
+    "Amount 5000000 exceeds maxLamportsPerTx 1000000",
+    "Protocol jupiter not allowed"
+  ],
+  "riskTier": "high"
+}
+```
+
+### Require Approval
+
+**Transaction pauses at approval gate**, waiting for operator decision.
+
+- Transaction meets soft thresholds requiring human review
+- Status becomes `approval_gate`
+- Operator must call `/approve` or `/reject` endpoint
+
+Example response:
+```json
+{
+  "decision": "require_approval",
+  "reasons": [
+    "Amount 3000000 is above approval threshold 2000000",
+    "Critical risk tier requires approval by default"
+  ],
+  "riskTier": "critical"
+}
+```
+
+## Risk Tier Classification
+
+The policy engine automatically assigns a risk tier to each intent:
+
+```typescript
+// From services/policy-engine/src/engine/policy-evaluator.ts
+
+const deduceRiskTier = (input: PolicyEvaluationRequest): RiskTier => {
+  if (input.riskTierHint) {
+    return input.riskTierHint; // Explicit override
+  }
+  if (RESTRICTED_TYPES.has(input.type)) {
+    return 'critical'; // flash_loan_bundle, cpi_call, custom_instruction_bundle
+  }
+  if ((input.amountLamports ?? 0) > 2_000_000_000) {
+    return 'high'; // > 2 SOL
+  }
+  if (input.type.includes('swap') || input.type.includes('lend') || input.type.includes('stake')) {
+    return 'medium'; // DeFi operations
+  }
+  return 'low'; // Standard transfers, queries
+};
+```
+
+<CardGroup cols={2}>
+  <Card title="Low" icon="circle" color="#10b981">
+    Standard transfers, balance queries
+  </Card>
+  <Card title="Medium" icon="circle" color="#f59e0b">
+    Swaps, staking, lending operations
+  </Card>
+  <Card title="High" icon="circle" color="#ef4444">
+    Large amounts (> 2 SOL)
+  </Card>
+  <Card title="Critical" icon="circle" color="#7c3aed">
+    Flash loans, CPI calls, custom instructions
+  </Card>
+</CardGroup>
+
+<Warning>
+  Critical risk tier intents **require approval by default**, even if no explicit policy rule demands it.
+</Warning>
+
+## Policy Rule Types
+
+Policies consist of arrays of typed rules. Each rule evaluates independently, and the most restrictive decision wins.
+
+### Spending Limit
+
+Controls transaction amounts and daily spend:
+
+```typescript
+{
+  "type": "spending_limit",
+  "maxLamportsPerTx": 1000000,        // Hard limit per transaction
+  "maxLamportsPerDay": 10000000,      // Daily rolling limit
+  "requireApprovalAboveLamports": 500000  // Soft threshold for approval
+}
+```
+
+**Behavior:**
+- `maxLamportsPerTx`: Deny if transaction exceeds this amount
+- `maxLamportsPerDay`: Track daily spend per wallet, deny if cumulative spend exceeds limit
+- `requireApprovalAboveLamports`: Require approval if amount at or above threshold
+
+**Daily spend tracking:**
+- Spending tracked per wallet per UTC day (`YYYY-MM-DD`)
+- State persisted in `services/policy-engine/data/policy-evaluator-snapshot.json`
+- Spending only incremented after `allow` decision
+
+Example evaluation:
+```typescript
+// From services/policy-engine/src/engine/policy-evaluator.ts:147
+
+const day = new Date(input.timestamp ?? Date.now()).toISOString().slice(0, 10);
+const key = `${input.walletId}:${day}`;
+const alreadySpent = this.dailySpendByWallet.get(key) ?? 0;
+
+if (alreadySpent + amount > rule.maxLamportsPerDay) {
+  return {
+    decision: 'deny',
+    reasons: [
+      `Projected daily spend ${alreadySpent + amount} exceeds maxLamportsPerDay ${rule.maxLamportsPerDay}`
+    ],
+  };
+}
+```
+
+### Address Allowlist
+
+Restrict transactions to approved destination addresses:
+
+```typescript
+{
+  "type": "address_allowlist",
+  "addresses": [
+    "8xW7Xq1n4oKjMXc2E5L9rNv3Yz6B4Fg8...",
+    "9zA3Bm8Tp5Jq7Kx4Fv2Hn6Yz8Wg3Rd1..."
+  ]
+}
+```
+
+**Behavior:**
+- If `destination` field present, must be in allowlist
+- Deny if destination not in list
+- Allow if no destination (e.g., staking operations)
+
+### Address Blocklist
+
+Block transactions to specific addresses:
+
+```typescript
+{
+  "type": "address_blocklist",
+  "addresses": [
+    "BadActor111111111111111111111111111",
+    "MaliciousAddress222222222222222222"
+  ]
+}
+```
+
+**Behavior:**
+- Deny if `destination` is in blocklist
+- Allow otherwise
+
+### Program Allowlist
+
+Restrict which Solana programs can be invoked:
+
+```typescript
+{
+  "type": "program_allowlist",
+  "programIds": [
+    "11111111111111111111111111111111",  // System program
+    "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"  // SPL Token
+  ]
+}
+```
+
+**Behavior:**
+- Transaction builder extracts all program IDs from transaction
+- Deny if any program ID not in allowlist
+- Useful for restricting to known safe programs
+
+### Token Allowlist
+
+Restrict which SPL tokens can be transferred:
+
+```typescript
+{
+  "type": "token_allowlist",
+  "mints": [
+    "So11111111111111111111111111111111111111112",  // Wrapped SOL
+    "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v"   // USDC
+  ]
+}
+```
+
+**Behavior:**
+- If `tokenMint` present, must be in allowlist
+- Deny if token mint not allowed
+- Allow if no token mint (native SOL transfers)
+
+### Protocol Allowlist
+
+Restrict which protocol adapters can be used:
+
+```typescript
+{
+  "type": "protocol_allowlist",
+  "protocols": [
+    "system-program",
+    "jupiter",
+    "marinade"
+  ]
+}
+```
+
+**Behavior:**
+- Check `protocol` field in intent
+- Deny if protocol not in allowlist
+- Useful for limiting agents to specific DeFi protocols
+
+### Rate Limit
+
+Limit transaction frequency per wallet/agent:
+
+```typescript
+{
+  "type": "rate_limit",
+  "maxTx": 10,
+  "windowSeconds": 60
+}
+```
+
+**Behavior:**
+- Track transaction timestamps per `walletId:agentId` key
+- Sliding window: filter events older than `windowSeconds`
+- Deny if count exceeds `maxTx` in current window
+- Add current transaction to event log
+
+Example:
+```typescript
+// From services/policy-engine/src/engine/policy-evaluator.ts:221
+
+const key = `${input.walletId}:${input.agentId ?? 'none'}`;
+const now = Date.now();
+const windowStart = now - rule.windowSeconds * 1000;
+const events = (this.rateLimitEvents.get(key) ?? [])
+  .filter((event) => event.timestamp >= windowStart);
+
+if (events.length >= rule.maxTx) {
+  return {
+    decision: 'deny',
+    reasons: [
+      `Rate limit exceeded: ${events.length}/${rule.maxTx} in ${rule.windowSeconds}s`
+    ],
+  };
+}
+```
+
+### Time Window
+
+Restrict transactions to specific UTC hours:
+
+```typescript
+{
+  "type": "time_window",
+  "startHourUtc": 9,   // 9 AM UTC
+  "endHourUtc": 17     // 5 PM UTC
+}
+```
+
+**Behavior:**
+- Extract UTC hour from transaction timestamp
+- Allow if hour within range (inclusive)
+- Handle wrap-around: `startHourUtc=22, endHourUtc=6` means 10 PM to 6 AM
+- Useful for business-hours-only execution
+
+### Max Slippage
+
+Limit slippage tolerance for swaps:
+
+```typescript
+{
+  "type": "max_slippage",
+  "maxBps": 100  // 1%
+}
+```
+
+**Behavior:**
+- Check `slippageBps` field in intent
+- Deny if slippage exceeds `maxBps`
+- Protects against sandwich attacks and excessive MEV
+
+### Protocol Risk
+
+Granular controls per protocol:
+
+```typescript
+{
+  "type": "protocol_risk",
+  "protocol": "jupiter",
+  "maxSlippageBps": 50,
+  "maxPoolConcentrationBps": 5000,
+  "allowedPools": ["pool-1", "pool-2"],
+  "allowedPrograms": ["JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB"],
+  "oracleDeviationBps": 200
+}
+```
+
+**Behavior:**
+- Only applies to intents with matching `protocol` field
+- `maxSlippageBps`: Protocol-specific slippage limit
+- `maxPoolConcentrationBps`: Limit concentration risk in liquidity pools
+- `allowedPools`: Whitelist of pool addresses
+- `allowedPrograms`: Whitelist of program IDs for this protocol
+- `oracleDeviationBps`: Require approval if quoted price deviates from oracle by this amount
+
+### Portfolio Risk
+
+Portfolio-wide risk controls:
+
+```typescript
+{
+  "type": "portfolio_risk",
+  "maxDrawdownLamports": 100000000,
+  "maxDailyLossLamports": 50000000,
+  "maxExposureBpsPerToken": 3000,     // 30%
+  "maxExposureBpsPerProtocol": 5000   // 50%
+}
+```
+
+**Behavior:**
+- `maxDrawdownLamports`: Deny if projected drawdown exceeds limit
+- `maxDailyLossLamports`: Deny if projected daily loss exceeds limit
+- `maxExposureBpsPerToken`: Require approval if token exposure exceeds percentage
+- `maxExposureBpsPerProtocol`: Require approval if protocol exposure exceeds percentage
+
+<Note>
+  Portfolio risk rules require transaction-engine to provide projected risk metrics in the evaluation request. These are computed from position tracking and current market data.
+</Note>
+
+## Approval Gate Workflow
+
+When a policy returns `require_approval`, the transaction enters the approval gate:
+
+<Steps>
+  <Step title="Transaction Paused">
+    Transaction status becomes `approval_gate`:
+    ```json
+    {
+      "id": "tx-uuid",
+      "status": "approval_gate",
+      "walletId": "wallet-uuid",
+      "type": "transfer_sol",
+      "policyDecision": {
+        "decision": "require_approval",
+        "reasons": ["Amount 3000000 is above approval threshold 2000000"],
+        "riskTier": "high"
+      }
+    }
+    ```
+  </Step>
+  <Step title="List Pending Approvals">
+    Operator queries pending approvals:
+    ```bash
+    curl -H 'x-api-key: dev-api-key' \
+      http://localhost:3000/api/v1/wallets/:walletId/pending-approvals
+    ```
+  </Step>
+  <Step title="Review Transaction">
+    Operator reviews transaction details, policy reasons, and risk tier
+  </Step>
+  <Step title="Approve or Reject">
+    Operator makes decision:
+    
+    **Approve:**
+    ```bash
+    curl -X POST -H 'x-api-key: dev-api-key' \
+      http://localhost:3000/api/v1/transactions/:txId/approve
+    ```
+    
+    **Reject:**
+    ```bash
+    curl -X POST -H 'x-api-key: dev-api-key' \
+      http://localhost:3000/api/v1/transactions/:txId/reject
+    ```
+  </Step>
+  <Step title="Execution Continues or Fails">
+    - If approved: Transaction proceeds to `signing` status
+    - If rejected: Transaction fails with `status=failed`
+  </Step>
+</Steps>
+
+### CLI Approval Commands
+
+```bash
+# List pending approvals
+npm run cli -- tx pending --wallet-id <walletId>
+
+# Approve transaction
+npm run cli -- tx approve <txId>
+
+# Reject transaction
+npm run cli -- tx reject <txId>
+```
+
+## Policy Versioning
+
+Policies support versioning for safe updates:
+
+```typescript
+{
+  "id": "policy-uuid",
+  "walletId": "wallet-uuid",
+  "name": "trading-limits",
+  "version": 2,  // Incremented on update
+  "active": true,
+  "rules": [...],
+  "createdAt": "2026-03-01T00:00:00.000Z",
+  "updatedAt": "2026-03-08T00:00:00.000Z"
+}
+```
+
+### Version History
+
+```bash
+# List all versions
+npm run cli -- policy versions <policyId>
+
+# Get specific version
+npm run cli -- policy version <policyId> --number 1
+```
+
+### Policy Migration
+
+Migrate between policy versions with safety checks:
+
+```bash
+npm run cli -- policy migrate <policyId> \
+  --target-version 2 \
+  --mode safe
+```
+
+**Migration modes:**
+- `safe`: Only migrate if target version is more restrictive
+- `force`: Migrate regardless of restrictiveness
+- `dry-run`: Simulate migration without applying
+
+### Compatibility Check
+
+Test rule compatibility before creating policy:
+
+```bash
+npm run cli -- policy compatibility-check \
+  --rules '[{"type":"spending_limit","maxLamportsPerTx":1000000}]'
+```
+
+<Note>
+  Policy versioning is automatic. Every `PUT /api/v1/policies/:policyId` creates a new version while preserving old versions for audit purposes.
+</Note>
+
+## Policy Evaluation Testing
+
+Test policy decisions without submitting real transactions:
+
+```bash
+npm run cli -- policy evaluate \
+  --wallet-id <walletId> \
+  --type transfer_sol \
+  --protocol system-program \
+  --destination 8xW7... \
+  --amount-lamports 1000000
+```
+
+Response:
+```json
+{
+  "decision": "allow",
+  "reasons": [],
+  "riskTier": "low"
+}
+```
+
+## Best Practices
+
+<Steps>
+  <Step title="Layer Multiple Rule Types">
+    Combine spending limits, allowlists, and rate limits for defense in depth
+  </Step>
+  <Step title="Start Restrictive">
+    Begin with tight limits and loosen gradually based on agent behavior
+  </Step>
+  <Step title="Use Approval Thresholds">
+    Set `requireApprovalAboveLamports` rather than hard denials for large amounts
+  </Step>
+  <Step title="Monitor Policy Decisions">
+    Query audit events to track policy denials and approvals
+  </Step>
+  <Step title="Test Before Deployment">
+    Use `policy evaluate` and `strategy backtest` to validate policies
+  </Step>
+  <Step title="Version Control Policies">
+    Keep policy definitions in source control, track changes
+  </Step>
+  <Step title="Protocol-Specific Rules">
+    Use `protocol_risk` rules for fine-grained DeFi controls
+  </Step>
+  <Step title="Rate Limit Autonomous Agents">
+    Always attach rate limit rules to autonomous agents
+  </Step>
+</Steps>
+
+## Related Pages
+
+<CardGroup cols={2}>
+  <Card title="Security Overview" icon="shield" href="/security/overview">
+    Trust boundaries and protection layers
+  </Card>
+  <Card title="Key Management" icon="key" href="/security/key-management">
+    Private key isolation and storage
+  </Card>
+</CardGroup>

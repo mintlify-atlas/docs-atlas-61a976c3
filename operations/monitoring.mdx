@@ -1,0 +1,414 @@
+---
+title: 'Monitoring'
+description: 'Monitor service health, audit events, transaction proofs, and system metrics'
+---
+
+## Service Health Endpoints
+
+Each service exposes a `/health` endpoint for liveness checks and uptime monitoring.
+
+### Health Check Reference
+
+<CodeGroup>
+```bash API Gateway
+GET http://localhost:3000/health
+
+Response:
+{
+  "status": "ok",
+  "service": "api-gateway"
+}
+```
+
+```bash Wallet Engine
+GET http://localhost:3002/health
+
+Response:
+{
+  "status": "ok",
+  "service": "wallet-engine"
+}
+```
+
+```bash Policy Engine
+GET http://localhost:3003/health
+
+Response:
+{
+  "status": "ok",
+  "service": "policy-engine"
+}
+```
+
+```bash Agent Runtime
+GET http://localhost:3004/health
+
+Response:
+{
+  "status": "ok",
+  "service": "agent-runtime"
+}
+```
+
+```bash Protocol Adapters
+GET http://localhost:3005/health
+
+Response:
+{
+  "status": "ok",
+  "service": "protocol-adapters"
+}
+```
+
+```bash Transaction Engine
+GET http://localhost:3006/health
+
+Response:
+{
+  "status": "ok",
+  "service": "transaction-engine"
+}
+```
+
+```bash Audit & Observability
+GET http://localhost:3007/health
+
+Response:
+{
+  "status": "ok",
+  "service": "audit-observability"
+}
+```
+
+```bash MCP Server
+GET http://localhost:3008/health
+
+Response:
+{
+  "status": "ok",
+  "service": "mcp-server"
+}
+```
+</CodeGroup>
+
+### Automated Health Checks
+
+Use the CLI `doctor` command to check all services at once:
+
+```bash
+npm run cli -- doctor
+```
+
+This command:
+- Checks gateway reachability
+- Validates all service health endpoints
+- Reports connectivity issues
+- Returns non-zero exit code on failure (suitable for CI/CD)
+
+## Protocol Adapter Health
+
+Protocol adapters expose health check endpoints to verify configuration and on-chain program deployment.
+
+### Check All Protocols
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/protocols/health
+```
+
+Response:
+```json
+{
+  "protocols": [
+    {
+      "protocol": "escrow",
+      "ok": true,
+      "configured": true,
+      "deployed": true
+    },
+    {
+      "protocol": "jupiter",
+      "ok": true
+    }
+  ]
+}
+```
+
+### Check Specific Protocol
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/protocols/escrow/health
+```
+
+Response:
+```json
+{
+  "ok": true,
+  "configured": true,
+  "deployed": true,
+  "programId": "EscrowProgramIdXXXXXXXXXXXXXXXXXXXXXXXXXXX"
+}
+```
+
+<Note>
+  The escrow adapter health check verifies:
+  - `ESCROW_PROGRAM_ID` is set in environment
+  - Program account exists on-chain
+  - Program is executable
+</Note>
+
+## Audit Events
+
+The `audit-observability` service collects and stores structured audit events for all critical operations.
+
+### Event Types
+
+- `transaction.created`
+- `transaction.simulated`
+- `transaction.policy_evaluated`
+- `transaction.signed`
+- `transaction.submitted`
+- `transaction.confirmed`
+- `transaction.failed`
+- `wallet.created`
+- `agent.created`
+- `agent.started`
+- `agent.stopped`
+- `agent.paused`
+- `policy.evaluated`
+
+### Query Audit Events
+
+<CodeGroup>
+```bash All Events
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/audit/events
+```
+
+```bash By Transaction
+curl -H 'x-api-key: dev-api-key' \
+  "http://localhost:3000/api/v1/audit/events?txId=<txId>"
+```
+
+```bash By Agent
+curl -H 'x-api-key: dev-api-key' \
+  "http://localhost:3000/api/v1/audit/events?agentId=<agentId>"
+```
+
+```bash By Wallet
+curl -H 'x-api-key: dev-api-key' \
+  "http://localhost:3000/api/v1/audit/events?walletId=<walletId>"
+```
+
+```bash By Protocol
+curl -H 'x-api-key: dev-api-key' \
+  "http://localhost:3000/api/v1/audit/events?protocol=escrow"
+```
+</CodeGroup>
+
+### Create Audit Event
+
+Post custom audit events:
+
+```bash
+curl -X POST -H 'x-api-key: dev-api-key' \
+  -H 'Content-Type: application/json' \
+  http://localhost:3000/api/v1/audit/events \
+  -d '{
+    "eventType": "custom.event",
+    "message": "Custom audit event",
+    "metadata": {
+      "customField": "value"
+    }
+  }'
+```
+
+## Transaction Proofs
+
+Every transaction generates a cryptographic proof artifact for auditability and replay.
+
+### Proof Structure
+
+```typescript
+interface ExecutionProof {
+  txId: string;
+  walletId: string;
+  agentId?: string;
+  intentHash: string;        // SHA-256 of intent payload
+  policyHash: string;        // SHA-256 of policy decision
+  simulationHash: string;    // SHA-256 of simulation result
+  signature?: string;        // On-chain transaction signature
+  proofHash: string;         // SHA-256 of combined proof
+  createdAt: string;
+}
+```
+
+### Retrieve Transaction Proof
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/transactions/<txId>/proof
+```
+
+Response:
+```json
+{
+  "txId": "tx_abc123",
+  "walletId": "wallet_xyz789",
+  "intentHash": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+  "policyHash": "cf83e1357eefb8bdf1542850d66d8007d620e4050b5715dc83f4a921d36ce9ce",
+  "simulationHash": "2c26b46b68ffc68ff99b453c1d30413413422d706483bfa0f98a5e886266e7ae",
+  "signature": "5vJ8Q...",
+  "proofHash": "fcde2b2edba56bf408601fb721fe9b5c338d10ee429ea04fae5511b68fbf8fb9",
+  "createdAt": "2026-03-08T10:30:00.000Z"
+}
+```
+
+### Replay Transaction
+
+Retrieve the complete execution context for replay:
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/transactions/<txId>/replay
+```
+
+Response:
+```json
+{
+  "txId": "tx_abc123",
+  "request": { /* original intent */ },
+  "policyDecision": { /* policy evaluation result */ },
+  "simulation": { /* simulation output */ },
+  "proof": { /* execution proof */ },
+  "history": [ /* stage transitions */ ]
+}
+```
+
+<Note>
+  Use the replay endpoint to debug failures, verify policy decisions, and reconstruct transaction execution flow.
+</Note>
+
+## Metrics
+
+The metrics store tracks counters for system events and operations.
+
+### Increment Metric
+
+```bash
+curl -X POST -H 'x-api-key: dev-api-key' \
+  -H 'Content-Type: application/json' \
+  http://localhost:3000/api/v1/metrics/inc \
+  -d '{
+    "name": "custom.metric",
+    "value": 1
+  }'
+```
+
+### Get All Metrics
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/metrics
+```
+
+Response:
+```json
+{
+  "data": {
+    "audit_event.transaction.created": 142,
+    "audit_event.transaction.confirmed": 138,
+    "audit_event.wallet.created": 12,
+    "custom.metric": 5
+  }
+}
+```
+
+### Built-in Metrics
+
+The system automatically tracks:
+
+- `audit_event.<eventType>` - Count of each audit event type
+- Transaction stage transitions
+- Policy evaluation results
+- RPC pool failover events
+- Outbox retry attempts
+
+## RPC Pool Status
+
+Monitor RPC endpoint health and failover behavior:
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/rpc/pool/status
+```
+
+Response:
+```json
+{
+  "endpoints": [
+    {
+      "url": "https://api.devnet.solana.com",
+      "score": 0.95,
+      "successes": 142,
+      "failures": 3,
+      "avgLatencyMs": 230,
+      "failStreak": 0,
+      "lastCheckedAt": "2026-03-08T10:30:00.000Z"
+    }
+  ]
+}
+```
+
+### Health Score Calculation
+
+- Initial score: `1.0`
+- Success: `score += 0.06 - latencyPenalty`
+- Failure: `score *= 0.7`
+- Minimum score: `0.05`
+
+**Latency Penalties:**
+- ≤ 200ms: no penalty
+- 201-500ms: -0.04
+- 501-1000ms: -0.08
+- > 1000ms: -0.12
+
+<Note>
+  Endpoints are automatically sorted by score (then by latency) for failover selection.
+</Note>
+
+## Outbox Queue Status
+
+Monitor the durable outbox queue for pending and failed transactions:
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/outbox/stats
+```
+
+Response:
+```json
+{
+  "pending": 3,
+  "processing": 2,
+  "failed": 0,
+  "done": 145
+}
+```
+
+### Outbox Job Lifecycle
+
+1. **pending** - Job queued, waiting for worker
+2. **processing** - Worker has claimed lease
+3. **done** - Successfully completed
+4. **failed** - Exceeded max retry attempts
+
+<Accordion title="Lease and Retry Semantics">
+  Jobs in `processing` state have an active lease. If a worker crashes, the lease expires and the job returns to `pending`.
+  
+  Configuration:
+  - `TX_OUTBOX_LEASE_MS` - Lease duration (default: 30000ms)
+  - `TX_OUTBOX_MAX_ATTEMPTS` - Max retries (default: 6)
+  - `TX_OUTBOX_POLL_MS` - Worker poll interval (default: 2000ms)
+</Accordion>

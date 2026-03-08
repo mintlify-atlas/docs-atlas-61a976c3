@@ -1,0 +1,911 @@
+---
+title: 'Execution Flow'
+description: 'Transaction lifecycle, escrow operations, and agent execution patterns'
+---
+
+## Transaction Lifecycle
+
+Every transaction in Agentic Wallet follows a deterministic state machine with clear failure points and recovery paths.
+
+### Transaction States
+
+```text
+pending → simulating → policy_eval → approval_gate → signing → submitting → confirmed
+            ↓             ↓              ↓            ↓          ↓             ↓
+            └─────────────┴──────────────┴────────────┴──────────┴────────→ failed
+```
+
+<Steps>
+  <Step title="pending">
+    Transaction record created, basic validation complete
+  </Step>
+  <Step title="simulating">
+    Building unsigned transaction and running simulation against Solana RPC
+  </Step>
+  <Step title="policy_eval">
+    Evaluating protocol risk and policy rules
+  </Step>
+  <Step title="approval_gate" icon="pause">
+    **Optional**: Paused for manual approval (only if policy returns `require_approval`)
+  </Step>
+  <Step title="signing">
+    Transaction sent to wallet-engine for signature
+  </Step>
+  <Step title="submitting">
+    Signed transaction submitted to Solana RPC or Kora (gasless)
+  </Step>
+  <Step title="confirmed" icon="check">
+    Transaction confirmed on-chain, execution proof generated
+  </Step>
+  <Step title="failed" icon="xmark">
+    Transaction failed at any stage, error recorded, failure proof generated
+  </Step>
+</Steps>
+
+---
+
+## Full Transaction Flow (Spend-Capable)
+
+### Step-by-Step Execution
+
+<Accordion title="1. Request Ingestion">
+  **Entry Point**: `POST /api/v1/transactions`
+
+  ```json
+  {
+    "walletId": "wallet-123",
+    "agentId": "agent-456",
+    "type": "transfer_sol",
+    "protocol": "system-program",
+    "intent": {
+      "destination": "recipient-pubkey",
+      "lamports": 1000000
+    }
+  }
+  ```
+
+  **Actions**:
+  - API Gateway validates API key and rate limits
+  - Gateway proxies to transaction-engine
+  - Transaction-engine validates schema with Zod
+  - Creates transaction record with `pending` status
+  - Enqueues to durable outbox
+</Accordion>
+
+<Accordion title="2. Pre-Balance Snapshot">
+  **Actions**:
+  - Fetch current wallet balance from wallet-engine
+  - Store `preBalanceLamports` in transaction record
+  - Update portfolio risk tracker with current balance
+</Accordion>
+
+<Accordion title="3. Transaction Building">
+  **For `transfer_sol`** (built locally):
+  - Fetch wallet public key from wallet-engine
+  - Check if destination account exists
+  - Validate amount meets rent-exemption minimum if unfunded
+  - Build `SystemProgram.transfer()` instruction
+  - Apply adaptive compute budget and priority fee
+  - Set recent blockhash
+
+  **For protocol operations** (via protocol-adapters):
+  - Call `POST /api/v1/build` with intent
+  - Protocol adapter constructs protocol-specific instructions
+  - Returns unsigned transaction or instruction list
+
+  **Status**: `simulating`
+</Accordion>
+
+<Accordion title="4. Simulation">
+  **Actions**:
+  - Serialize unsigned transaction
+  - Call `connection.simulateTransaction()` with failover
+  - Retry with exponential backoff on RPC failures
+
+  **Success Path**:
+  - Simulation returns `ok: true`
+  - Logs stored for proof generation
+  - Proceeds to policy evaluation
+
+  **Failure Path**:
+  - Simulation returns error
+  - Transaction marked as `failed` with simulation error
+  - Failure proof generated
+  - Execution stops
+</Accordion>
+
+<Accordion title="5. Protocol Risk Evaluation">
+  **Risk Checks** (executed in transaction-engine):
+
+  ✓ **Slippage Check**:
+  ```typescript
+  if (slippageBps > config.maxSlippageBps) {
+    return 'deny';
+  }
+  ```
+
+  ✓ **Pool Allowlist**:
+  ```typescript
+  if (config.allowedPools.length > 0 && !config.allowedPools.includes(pool)) {
+    return 'deny';
+  }
+  ```
+
+  ✓ **Program Allowlist**:
+  ```typescript
+  if (config.allowedPrograms.length > 0 && !programIds.every(p => config.allowedPrograms.includes(p))) {
+    return 'deny';
+  }
+  ```
+
+  ✓ **Pool Concentration**:
+  ```typescript
+  const concentrationBps = (amountLamports / preBalanceLamports) * 10000;
+  if (concentrationBps > config.maxPoolConcentrationBps) {
+    return 'deny';
+  }
+  ```
+
+  ✓ **Quote Staleness**:
+  ```typescript
+  const ageSeconds = (now - quoteTimestamp) / 1000;
+  if (ageSeconds > config.maxQuoteAgeSeconds) {
+    return 'deny';
+  }
+  ```
+
+  ✓ **Oracle Deviation**:
+  ```typescript
+  const deviation = Math.abs(oraclePrice - quotedPrice) / oraclePrice * 10000;
+  if (deviation > config.oracleDeviationBps) {
+    return 'require_approval';
+  }
+  ```
+
+  ✓ **Portfolio Risk**:
+  - Token exposure limits
+  - Protocol exposure limits
+  - Daily loss limits
+  - Max drawdown limits
+
+  **Status**: `policy_eval`
+</Accordion>
+
+<Accordion title="6. Policy Evaluation">
+  **Actions**:
+  - Call `POST ${policyEngineUrl}/api/v1/evaluate`
+  - Fetch active policies for wallet
+  - Execute all policy rules
+  - Aggregate results
+
+  **Decision Types**:
+
+  **`allow`**: Proceed to signing
+
+  **`deny`**: Stop execution, mark as `failed`
+  ```json
+  {
+    "decision": "deny",
+    "reasons": ["Daily spending limit exceeded"],
+    "riskTier": "high"
+  }
+  ```
+
+  **`require_approval`**: Pause at approval gate
+  ```json
+  {
+    "decision": "require_approval",
+    "reasons": ["Transaction amount exceeds auto-approval threshold"],
+    "riskTier": "medium"
+  }
+  ```
+
+  **Fail-Secure**:
+  - If policy-engine is unreachable → return `deny`
+  - If evaluation throws error → return `deny`
+</Accordion>
+
+<Accordion title="7. Approval Gate (Conditional)">
+  **Triggered When**:
+  - Policy returns `require_approval`
+  - Protocol risk returns `require_approval`
+  - `requireApprovalOnDemand` flag is set
+
+  **Actions**:
+  - Set status to `approval_gate`
+  - Store in pending approvals table with 24h expiry
+  - Return `202 Accepted` with `awaitingApproval: true`
+  - Execution pauses here
+
+  **Resume Paths**:
+
+  **Approval**: `POST /api/v1/transactions/:txId/approve`
+  - Proceeds to signing
+
+  **Rejection**: `POST /api/v1/transactions/:txId/reject`
+  - Marks as `failed` with rejection reason
+</Accordion>
+
+<Accordion title="8. Signing">
+  **Actions**:
+  - Set status to `signing`
+  - Call `POST ${walletEngineUrl}/api/v1/wallets/:walletId/sign`
+  - Wallet-engine loads private key from key provider
+  - Signs transaction
+  - Returns signed transaction and signature
+
+  **Security Boundary**:
+  - Only wallet-engine can read private keys
+  - Transaction-engine never sees key material
+  - Signed transaction stored in durable outbox
+
+  **Failure Path**:
+  - Signing fails → mark as `failed`
+  - Generate failure proof
+</Accordion>
+
+<Accordion title="9. Submission">
+  **Actions**:
+  - Set status to `submitting`
+
+  **Standard Path** (via Solana RPC):
+  ```typescript
+  const signature = await connection.sendRawTransaction(signedTx, {
+    skipPreflight: false,
+    preflightCommitment: 'confirmed',
+    maxRetries: 3
+  });
+  await connection.confirmTransaction(signature, 'confirmed');
+  ```
+
+  **Gasless Path** (via Kora RPC):
+  ```typescript
+  const response = await fetch(koraRpcUrl, {
+    method: 'POST',
+    body: JSON.stringify({
+      jsonrpc: '2.0',
+      method: 'signAndSendTransaction',
+      params: { transaction: signedTx }
+    })
+  });
+  ```
+
+  **Failover**:
+  - RPC pool rotates to healthy endpoint on failure
+  - Exponential backoff retry
+  - Durable outbox ensures recovery on restart
+</Accordion>
+
+<Accordion title="10. Post-Balance Verification">
+  **Actions**:
+  - Fetch `postBalanceLamports` from wallet-engine
+  - Calculate actual lamport delta: `postBalance - preBalance`
+  - Calculate expected delta based on transaction type
+
+  **Delta Guard Check**:
+  ```typescript
+  const expectedDelta = -lamports - estimatedFee;
+  const actualDelta = postBalance - preBalance;
+  const varianceBps = Math.abs((actualDelta - expectedDelta) / Math.abs(expectedDelta)) * 10000;
+
+  if (varianceBps > config.deltaVarianceBpsThreshold && 
+      Math.abs(actualDelta - expectedDelta) > absoluteTolerance) {
+    // Delta guard breach
+    if (autoPauseOnBreach && agentId) {
+      pauseAgent(agentId, 'Delta guard breach');
+    }
+  }
+  ```
+
+  **Purpose**: Detect silent execution failures or sandwich attacks
+</Accordion>
+
+<Accordion title="11. Position Indexing">
+  **Actions**:
+  - Index DeFi positions based on transaction type
+
+  **Stake/Unstake**:
+  ```typescript
+  upsertPosition({
+    walletId,
+    protocol: 'marinade',
+    positionType: 'stake',
+    asset: 'SOL',
+    delta: amount
+  });
+  ```
+
+  **Lend Supply/Borrow**:
+  ```typescript
+  upsertPosition({
+    walletId,
+    protocol: 'solend',
+    positionType: 'lend_supply',
+    asset: tokenMint,
+    delta: amount
+  });
+  ```
+
+  **Escrow**:
+  ```typescript
+  upsertEscrow({
+    walletId,
+    protocol: 'escrow',
+    escrowId,
+    state: 'create_escrow',
+    counterparty,
+    amount
+  });
+  ```
+</Accordion>
+
+<Accordion title="12. Execution Proof Generation">
+  **Actions**:
+  - Generate deterministic proof with SHA-256 hashes
+
+  ```typescript
+  const proof = {
+    intentHash: sha256(JSON.stringify(intent)),
+    policyHash: sha256(JSON.stringify(policyDecision)),
+    simulationHash: sha256(JSON.stringify(simulationResult)),
+    proofHash: sha256(intentHash + policyHash + simulationHash + signature),
+    signature,
+    txId,
+    walletId,
+    agentId,
+    timestamp: now
+  };
+  ```
+
+  **Storage**:
+  - Store proof in transaction record
+  - Store proof in separate proof table for quick lookup
+  - Emit audit event with proof hashes
+</Accordion>
+
+<Accordion title="13. Status Finalization">
+  **Actions**:
+  - Set status to `confirmed`
+  - Set `confirmedAt` timestamp
+  - Emit audit event: `tx_status` with status `confirmed`
+  - Increment metrics: `tx.confirmed`, `tx.confirmation_latency_ms_total`
+  - Return success response
+
+  **Response**:
+  ```json
+  {
+    "status": "success",
+    "errorCode": null,
+    "failedAt": null,
+    "stage": "completed",
+    "traceId": "uuid",
+    "data": {
+      "id": "tx-123",
+      "status": "confirmed",
+      "signature": "5x...",
+      "executionProof": { ... },
+      "deltaGuard": { "ok": true },
+      "preBalanceLamports": 10000000,
+      "postBalanceLamports": 8900000
+    }
+  }
+  ```
+</Accordion>
+
+---
+
+## Read-Only Transaction Flow
+
+**Transaction Types**: `query_balance`, `query_positions`
+
+These bypass the full pipeline:
+
+<Steps>
+  <Step title="Create Record">
+    Transaction record created with `pending` status
+  </Step>
+  <Step title="Execute Query">
+    For `query_balance`:
+    - Fetch balance from wallet-engine
+    - Fetch tokens from wallet-engine
+
+    For `query_positions`:
+    - Fetch positions from transaction-engine
+    - Fetch escrows from transaction-engine
+    - Fetch recent transactions
+  </Step>
+  <Step title="Mark Confirmed">
+    Set status to `confirmed`, store result in `result` field
+  </Step>
+</Steps>
+
+**No policy evaluation, no signing, no RPC submission.**
+
+---
+
+## Escrow Lifecycle
+
+Escrow operations are backed by a **real Anchor program** deployed to Solana devnet.
+
+### Escrow State Machine
+
+```text
+┌─────────────┐
+│   Created   │
+└──────┬──────┘
+       │ accept_escrow
+       ↓
+┌─────────────┐
+│   Accepted  │
+└──────┬──────┘
+       │
+       ├─→ release_escrow → [Completed]
+       ├─→ refund_escrow  → [Refunded]
+       └─→ dispute_escrow → [Disputed]
+                              ↓
+                         resolve_dispute → [Resolved]
+```
+
+### Escrow Operations
+
+<Accordion title="create_escrow">
+  **Intent**:
+  ```json
+  {
+    "type": "create_escrow",
+    "protocol": "escrow",
+    "intent": {
+      "escrowNumericId": "900001",
+      "counterparty": "counterparty-pubkey",
+      "creator": "creator-pubkey",
+      "arbiter": "arbiter-pubkey",
+      "feeRecipient": "fee-recipient-pubkey",
+      "amount": "10000000",
+      "deadlineUnixSec": 4102444800,
+      "terms": "Escrow terms description"
+    }
+  }
+  ```
+
+  **On-Chain Instruction**:
+  - Calls `create_escrow` on Anchor program
+  - Creates escrow PDA with funds locked
+  - Emits `EscrowCreated` event
+
+  **Position Indexing**:
+  - Creates escrow record with state `create_escrow`
+</Accordion>
+
+<Accordion title="accept_escrow">
+  **Intent**:
+  ```json
+  {
+    "type": "accept_escrow",
+    "protocol": "escrow",
+    "intent": {
+      "escrowNumericId": "900001",
+      "creator": "creator-pubkey"
+    }
+  }
+  ```
+
+  **On-Chain Instruction**:
+  - Counterparty calls `accept_escrow`
+  - Marks escrow as accepted
+  - Emits `EscrowAccepted` event
+
+  **Position Update**:
+  - Updates escrow record state to `accept_escrow`
+</Accordion>
+
+<Accordion title="release_escrow">
+  **Intent**:
+  ```json
+  {
+    "type": "release_escrow",
+    "protocol": "escrow",
+    "intent": {
+      "escrowNumericId": "900001",
+      "creator": "creator-pubkey",
+      "counterparty": "counterparty-pubkey",
+      "feeRecipient": "fee-recipient-pubkey"
+    }
+  }
+  ```
+
+  **On-Chain Instruction**:
+  - Creator or arbiter releases funds to counterparty
+  - Transfers lamports minus fee
+  - Closes escrow account
+  - Emits `EscrowReleased` event
+
+  **Position Update**:
+  - Updates escrow record state to `release_escrow`
+</Accordion>
+
+<Accordion title="refund_escrow">
+  **Conditions**:
+  - Deadline passed and counterparty hasn't accepted
+  - OR arbiter decides to refund
+
+  **On-Chain Instruction**:
+  - Refunds lamports to creator
+  - Closes escrow account
+  - Emits `EscrowRefunded` event
+
+  **Position Update**:
+  - Updates escrow record state to `refund_escrow`
+</Accordion>
+
+<Accordion title="dispute_escrow">
+  **Conditions**:
+  - Counterparty or creator raises dispute
+
+  **On-Chain Instruction**:
+  - Marks escrow as disputed
+  - Arbiter notified
+  - Emits `EscrowDisputed` event
+
+  **Position Update**:
+  - Updates escrow record state to `dispute_escrow`
+</Accordion>
+
+<Accordion title="resolve_dispute">
+  **Conditions**:
+  - Only arbiter can call
+
+  **Intent**:
+  ```json
+  {
+    "type": "resolve_dispute",
+    "protocol": "escrow",
+    "intent": {
+      "escrowNumericId": "900001",
+      "creator": "creator-pubkey",
+      "counterparty": "counterparty-pubkey",
+      "decision": "release" | "refund"
+    }
+  }
+  ```
+
+  **On-Chain Instruction**:
+  - Arbiter decides release or refund
+  - Executes corresponding action
+  - Emits `DisputeResolved` event
+
+  **Position Update**:
+  - Updates escrow record state to `resolve_dispute`
+</Accordion>
+
+<Accordion title="Milestone Escrow">
+  **create_milestone_escrow**:
+  - Creates multi-milestone escrow
+  - Each milestone has separate release conditions
+
+  **release_milestone**:
+  - Releases individual milestone
+  - Remaining milestones stay locked
+</Accordion>
+
+<Accordion title="X402 Payment">
+  **x402_pay**:
+  - HTTP 402 payment protocol integration
+  - Pay-per-use resource access
+  - Micropayment escrow
+</Accordion>
+
+### Escrow Query Endpoints
+
+```bash
+# List all escrows for wallet
+GET /api/v1/wallets/:walletId/escrows
+
+# Response
+{
+  "data": [
+    {
+      "walletId": "wallet-123",
+      "protocol": "escrow",
+      "escrowId": "900001",
+      "state": "accept_escrow",
+      "counterparty": "counterparty-pubkey",
+      "amount": "10000000"
+    }
+  ]
+}
+```
+
+---
+
+## Agent Execution Flow
+
+### Supervised Mode
+
+Agent waits for external API calls:
+
+<Steps>
+  <Step title="Agent Created">
+    ```json
+    {
+      "name": "Trading Bot",
+      "walletId": "wallet-123",
+      "executionMode": "supervised",
+      "allowedIntents": ["swap", "transfer_sol"],
+      "allowedProtocols": ["jupiter", "system-program"]
+    }
+    ```
+  </Step>
+  <Step title="External Call">
+    Agent (via SDK or MCP) calls:
+    ```bash
+    POST /api/v1/agents/:agentId/execute
+    {
+      "type": "swap",
+      "protocol": "jupiter",
+      "intent": { ... }
+    }
+    ```
+  </Step>
+  <Step title="Capability Check">
+    - Check `allowedIntents` includes type
+    - Check `allowedProtocols` includes protocol
+    - Verify capability manifest (if required)
+  </Step>
+  <Step title="Budget Check">
+    - Check agent budget has sufficient lamports
+    - Deduct lamports from budget on approval
+  </Step>
+  <Step title="Execute Transaction">
+    - Proxy to transaction-engine
+    - Full transaction pipeline executes
+  </Step>
+</Steps>
+
+### Autonomous Mode
+
+Agent runs on scheduler with built-in decision engine:
+
+<Steps>
+  <Step title="Agent Started">
+    ```json
+    {
+      "name": "Yield Optimizer",
+      "executionMode": "autonomous",
+      "status": "running",
+      "autonomy": {
+        "enabled": true,
+        "loopIntervalMs": 60000,
+        "strategies": [
+          {
+            "id": "rebalance-strategy",
+            "conditions": [
+              { "type": "balance_above", "threshold": 5000000 }
+            ],
+            "steps": [
+              { "type": "swap", "protocol": "jupiter", "intent": {...} }
+            ]
+          }
+        ]
+      }
+    }
+    ```
+  </Step>
+  <Step title="Scheduler Tick">
+    Every `AGENT_LOOP_INTERVAL_MS` (default 5000ms):
+    - Fetch wallet context (balance, positions, transactions)
+    - Build autonomy context
+  </Step>
+  <Step title="Decision Engine">
+    For each strategy:
+    - Evaluate conditions
+    - Check cadence/cooldown/rate caps
+    - If conditions met → generate decision
+  </Step>
+  <Step title="Auto-Execute">
+    - Execute intent via internal API call
+    - Mark decision as executed with timestamp
+    - Update decision state (last execution time, rate counters)
+  </Step>
+  <Step title="Pause on Breach">
+    If delta guard or budget breach:
+    - Auto-pause agent (if `autoPauseOnBreach` enabled)
+    - Emit audit event
+    - Agent stops executing until manually resumed
+  </Step>
+</Steps>
+
+---
+
+## Durable Outbox Pattern
+
+### Problem
+
+Transactions must survive:
+- Process crashes
+- RPC timeouts
+- Network failures
+- Transient errors
+
+### Solution: Durable Outbox Queue
+
+<Steps>
+  <Step title="Enqueue">
+    Transaction queued to SQLite-backed outbox:
+    ```typescript
+    {
+      id: 'job-uuid',
+      txId: 'tx-123',
+      action: 'execute' | 'retry' | 'approve',
+      payload: { request, providedTransaction, ... },
+      status: 'pending',
+      attempts: 0,
+      createdAt: now,
+      leaseId: null,
+      leaseExpiresAt: null
+    }
+    ```
+  </Step>
+  <Step title="Claim">
+    Outbox worker claims next pending job:
+    - Set `leaseId = uuid`
+    - Set `leaseExpiresAt = now + 30s`
+    - Increment `attempts`
+    - Return job
+  </Step>
+  <Step title="Process">
+    Execute transaction pipeline
+  </Step>
+  <Step title="Mark Done">
+    On success:
+    - Delete job from outbox
+  </Step>
+  <Step title="Mark Failed">
+    On failure:
+    - If `retryable` and `attempts < maxAttempts`:
+      - Reset lease, job becomes pending again
+    - Else:
+      - Mark as permanently failed
+  </Step>
+  <Step title="Restart Recovery">
+    On service restart:
+    - Outbox worker drains up to 32 pending jobs
+    - Resumes any in-flight transactions
+  </Step>
+</Steps>
+
+### Lease Expiry
+
+If worker crashes mid-execution:
+- Lease expires after 30s
+- Job becomes available for retry
+- Another worker can claim it
+
+---
+
+## RPC Failover Flow
+
+### Problem
+
+Single RPC endpoint can:
+- Go down
+- Rate limit
+- Return stale data
+- Time out
+
+### Solution: Health-Scored Pool
+
+<Steps>
+  <Step title="Initialize Pool">
+    ```bash
+    SOLANA_RPC_POOL_URLS=https://api.devnet.solana.com,https://rpc.ankr.com/solana_devnet
+    ```
+
+    Each endpoint gets:
+    - Initial health score: 100
+    - Last probe time: now
+  </Step>
+  <Step title="Execute RPC Call">
+    ```typescript
+    await rpcPool.withFailover('getLatestBlockhash', async (connection) => {
+      return connection.getLatestBlockhash('confirmed');
+    });
+    ```
+  </Step>
+  <Step title="Select Endpoint">
+    - Sort endpoints by health score descending
+    - Pick first endpoint with score > 0
+  </Step>
+  <Step title="Execute with Retry">
+    ```typescript
+    for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+      try {
+        return await fn();
+      } catch (error) {
+        // Decay health score
+        endpoint.healthScore = Math.max(0, endpoint.healthScore - 20);
+        // Try next endpoint
+      }
+    }
+    ```
+  </Step>
+  <Step title="Health Probe">
+    Every 15s:
+    ```typescript
+    for (const endpoint of endpoints) {
+      try {
+        await connection.getSlot();
+        // Restore health score
+        endpoint.healthScore = Math.min(100, endpoint.healthScore + 10);
+      } catch {
+        // Decay health score
+        endpoint.healthScore = Math.max(0, endpoint.healthScore - 10);
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Adaptive Execution Tuning
+
+### Problem
+
+Solana transactions need:
+- Appropriate compute budget
+- Competitive priority fee
+- Both vary by network conditions
+
+### Solution: Adaptive Tuning
+
+<Steps>
+  <Step title="Fetch Recent Fees">
+    ```typescript
+    const recentFees = await connection.getRecentPrioritizationFees();
+    // Returns array of recent fee samples
+    ```
+  </Step>
+  <Step title="Calculate Priority Fee">
+    ```typescript
+    const sorted = recentFees.sort();
+    const percentile = sorted[Math.floor(sorted.length * 0.75)];
+    const adjusted = percentile * 1.15; // 115% multiplier
+    const clamped = Math.max(minFee, Math.min(maxFee, adjusted));
+    ```
+  </Step>
+  <Step title="Calculate Compute Budget">
+    Based on transaction type:
+    ```typescript
+    const baseUnits = {
+      transfer_sol: 200_000,
+      transfer_spl: 300_000,
+      swap: 800_000,
+      create_escrow: 500_000
+    };
+    const computeLimit = baseUnits[type] * (1 + instructionCount * 0.1);
+    ```
+  </Step>
+  <Step title="Apply to Transaction">
+    Add compute budget instructions:
+    ```typescript
+    tx.add(
+      ComputeBudgetProgram.setComputeUnitLimit({ units: computeLimit }),
+      ComputeBudgetProgram.setComputeUnitPrice({ microLamports: priorityFee })
+    );
+    ```
+  </Step>
+</Steps>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Trust Boundaries" icon="shield-halved" href="/architecture/trust-boundaries">
+    Deep dive into security model and control boundaries
+  </Card>
+
+  <Card title="Services" icon="server" href="/architecture/services">
+    Detailed service-by-service architecture reference
+  </Card>
+</CardGroup>

@@ -1,0 +1,304 @@
+---
+title: Wallets
+description: Understand wallet creation, custody models, and balance management in Agentic Wallet
+---
+
+# Wallets
+
+Wallets are the foundation of the Agentic Wallet system. Each wallet represents a Solana keypair with flexible custody options and built-in balance management.
+
+## Wallet Creation
+
+Wallets are created through the wallet-engine service and assigned a UUID identifier for internal tracking:
+
+```typescript
+interface WalletMetadata {
+  id: string;                    // UUID wallet identifier
+  publicKey: string;             // Base58-encoded Solana public key
+  provider: string;              // Custody provider type
+  keyProvenance?: KeyProvenance; // Key generation details
+  createdAt: string;             // ISO-8601 timestamp
+  status: 'active' | 'disabled';
+  label?: string;                // Optional human-readable label
+}
+```
+
+### Creating a Wallet
+
+<CodeGroup>
+```bash CLI
+npm run cli -- wallet create "My Trading Wallet"
+```
+
+```bash HTTP API
+curl -X POST http://localhost:3000/api/v1/wallets \
+  -H "Content-Type: application/json" \
+  -d '{"label": "My Trading Wallet"}'
+```
+
+```typescript SDK
+const wallet = await client.wallet.create({
+  label: "My Trading Wallet"
+});
+```
+</CodeGroup>
+
+### Auto-Funding (Devnet Only)
+
+For development, wallets can be automatically funded on creation:
+
+```json
+{
+  "label": "Test Wallet",
+  "autoFund": true,
+  "fundLamports": 1000000000
+}
+```
+
+<Note>
+Auto-funding only works with devnet RPC URLs and requires `WALLET_AUTOFUND_PAYER_PRIVATE_KEY` to be configured.
+</Note>
+
+## Signer Backends
+
+Agentic Wallet supports multiple signer backends for different security and deployment requirements:
+
+<CardGroup cols={2}>
+  <Card title="Encrypted File" icon="file-lock">
+    **Development & Testing**
+    
+    Keys encrypted with AES-256-GCM and stored locally.
+    
+    ```bash
+    WALLET_SIGNER_BACKEND=encrypted-file
+    WALLET_ENCRYPTION_SECRET=your-secret
+    ```
+  </Card>
+  
+  <Card title="Memory" icon="memory">
+    **Testing Only**
+    
+    Keys stored in-memory, lost on restart.
+    
+    ```bash
+    WALLET_SIGNER_BACKEND=memory
+    ```
+  </Card>
+  
+  <Card title="KMS" icon="cloud">
+    **Production: Cloud**
+    
+    AWS KMS or compatible key management service.
+    
+    ```bash
+    WALLET_SIGNER_BACKEND=kms
+    WALLET_KMS_MASTER_SECRET=...
+    WALLET_KMS_KEY_ID=...
+    ```
+  </Card>
+  
+  <Card title="HSM" icon="shield-halved">
+    **Production: Hardware**
+    
+    Hardware Security Module integration.
+    
+    ```bash
+    WALLET_SIGNER_BACKEND=hsm
+    WALLET_HSM_PIN=...
+    WALLET_HSM_MODULE_SECRET=...
+    WALLET_HSM_SLOT=0
+    ```
+  </Card>
+  
+  <Card title="MPC" icon="network-wired">
+    **Production: Distributed**
+    
+    Multi-Party Computation with threshold signatures.
+    
+    ```bash
+    WALLET_SIGNER_BACKEND=mpc
+    WALLET_MPC_NODE_SECRETS=secret1,secret2,secret3
+    ```
+  </Card>
+</CardGroup>
+
+### Key Provenance
+
+Each wallet includes provenance metadata:
+
+```typescript
+interface KeyProvenance {
+  backend: 'encrypted-file' | 'memory' | 'kms' | 'hsm' | 'mpc';
+  custody: 'local' | 'external';
+  deterministicAddressing: boolean;
+}
+```
+
+## Balance Queries
+
+### SOL Balance
+
+Query the native SOL balance for any wallet:
+
+<CodeGroup>
+```bash CLI
+npm run cli -- wallet balance <walletId>
+```
+
+```bash HTTP API
+curl http://localhost:3000/api/v1/wallets/{walletId}/balance
+```
+</CodeGroup>
+
+**Response:**
+```json
+{
+  "data": {
+    "walletId": "550e8400-e29b-41d4-a716-446655440000",
+    "publicKey": "9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g",
+    "lamports": 1000000000,
+    "sol": 1.0
+  }
+}
+```
+
+### SPL Token Balances
+
+Query all SPL token holdings:
+
+<CodeGroup>
+```bash CLI
+npm run cli -- wallet tokens <walletId>
+```
+
+```bash HTTP API
+curl http://localhost:3000/api/v1/wallets/{walletId}/tokens
+```
+</CodeGroup>
+
+**Response:**
+```json
+{
+  "data": {
+    "walletId": "550e8400-e29b-41d4-a716-446655440000",
+    "tokens": [
+      {
+        "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "1000000",
+        "decimals": 6,
+        "uiAmount": 1.0
+      }
+    ]
+  }
+}
+```
+
+## Signing Operations
+
+The wallet-engine provides a secure signing boundary. Private keys never leave the service:
+
+### Transaction Signing
+
+```json
+{
+  "transaction": "base64-encoded-transaction"
+}
+```
+
+Returns:
+```json
+{
+  "data": {
+    "signedTransaction": "base64-signed-transaction",
+    "signature": "base58-signature",
+    "txVersion": "v0" | "legacy"
+  }
+}
+```
+
+### Message Signing
+
+```json
+{
+  "message": "base64-encoded-message"
+}
+```
+
+Returns:
+```json
+{
+  "data": {
+    "signatureBase64": "...",
+    "signatureBase58": "..."
+  }
+}
+```
+
+<Warning>
+The `/api/v1/wallets/:walletId/sign` endpoint should only be called by trusted internal services (transaction-engine). Never expose this endpoint to external clients.
+</Warning>
+
+## Wallet Listing
+
+List all wallets or filter by public key:
+
+<CodeGroup>
+```bash All Wallets
+curl http://localhost:3000/api/v1/wallets
+```
+
+```bash Filter by Public Key
+curl "http://localhost:3000/api/v1/wallets?publicKey=9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g"
+```
+</CodeGroup>
+
+## RPC Reliability
+
+Wallet-engine includes automatic RPC retry logic:
+
+- **Health-scored RPC pool**: Automatic failover using `SOLANA_RPC_POOL_URLS`
+- **Adaptive retries**: Configurable max retries and delay
+- **Error detection**: Automatic retry for 429, fetch failures, blockhash issues
+
+### Configuration
+
+```bash
+SOLANA_RPC_URL=https://api.devnet.solana.com
+SOLANA_RPC_POOL_URLS=https://rpc1.com,https://rpc2.com
+SOLANA_RPC_MAX_RETRIES=5
+SOLANA_RPC_RETRY_DELAY_MS=500
+```
+
+## Best Practices
+
+<Accordion title="Production Deployment">
+  1. **Never use memory or encrypted-file backends in production**
+  2. Use KMS, HSM, or MPC for production key management
+  3. Enable RPC pool failover for high availability
+  4. Set appropriate retry limits to avoid cascading failures
+  5. Monitor wallet creation rate and implement rate limiting
+</Accordion>
+
+<Accordion title="Security">
+  1. Private keys never appear in logs or API responses
+  2. Signing operations are isolated in wallet-engine
+  3. All key material is encrypted at rest (except memory backend)
+  4. Use separate wallets for different risk profiles
+  5. Implement wallet status management (active/disabled)
+</Accordion>
+
+<Accordion title="Development">
+  1. Use autoFund for quick devnet testing
+  2. Label wallets clearly for debugging
+  3. Use encrypted-file backend for local development
+  4. Test RPC failover scenarios
+  5. Validate balance before attempting transactions
+</Accordion>
+
+## Source Code Reference
+
+Wallet functionality is implemented in:
+
+- `services/wallet-engine/src/app.ts` - Main wallet API (services/wallet-engine/src/app.ts:1)
+- `services/wallet-engine/src/key-provider/factory.ts` - Signer backend factory
+- `packages/common/src/schemas/wallet.ts` - TypeScript schemas (packages/common/src/schemas/wallet.ts:1)

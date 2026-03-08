@@ -1,0 +1,429 @@
+---
+title: 'Wallets'
+description: 'Wallet creation and management endpoints'
+icon: 'wallet'
+---
+
+## Create Wallet
+
+Create a new wallet with secure key custody.
+
+<CodeGroup>
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{"label": "trading-bot-1"}' \
+  http://localhost:3000/api/v1/wallets
+```
+
+```typescript TypeScript
+const response = await client.wallet.create({
+  label: 'trading-bot-1'
+});
+```
+
+```python Python
+response = requests.post(
+    'http://localhost:3000/api/v1/wallets',
+    headers={'x-api-key': 'dev-api-key'},
+    json={'label': 'trading-bot-1'}
+)
+```
+</CodeGroup>
+
+### Request Body
+
+<ParamField body="label" type="string">
+  Human-readable label for the wallet (1-128 characters)
+</ParamField>
+
+<ParamField body="autoFund" type="boolean" default={false}>
+  Automatically fund with devnet SOL (devnet only)
+</ParamField>
+
+<ParamField body="fundLamports" type="number">
+  Amount to fund in lamports when `autoFund` is true (max: 10,000,000,000)
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="string" required>
+  Unique wallet identifier (UUID)
+</ResponseField>
+
+<ResponseField name="publicKey" type="string" required>
+  Base58-encoded Solana public key
+</ResponseField>
+
+<ResponseField name="provider" type="enum" required>
+  Signer backend: `local-dev`, `local-memory`, `kms`, `hsm`, `mpc`
+</ResponseField>
+
+<ResponseField name="status" type="enum" required>
+  Wallet status: `active` or `disabled`
+</ResponseField>
+
+<ResponseField name="label" type="string">
+  Wallet label
+</ResponseField>
+
+<ResponseField name="createdAt" type="string" required>
+  ISO 8601 timestamp
+</ResponseField>
+
+<ResponseField name="keyProvenance" type="object">
+  Key custody information
+  <Expandable title="properties">
+    <ResponseField name="backend" type="enum">
+      `encrypted-file`, `memory`, `kms`, `hsm`, `mpc`
+    </ResponseField>
+    <ResponseField name="custody" type="enum">
+      `local` or `external`
+    </ResponseField>
+    <ResponseField name="deterministicAddressing" type="boolean">
+      Whether key derivation is deterministic
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+### Example Response
+
+```json
+{
+  "status": "success",
+  "stage": "completed",
+  "traceId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+  "data": {
+    "id": "550e8400-e29b-41d4-a716-446655440000",
+    "publicKey": "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy",
+    "provider": "local-dev",
+    "status": "active",
+    "label": "trading-bot-1",
+    "createdAt": "2026-03-08T12:00:00.000Z",
+    "keyProvenance": {
+      "backend": "encrypted-file",
+      "custody": "local",
+      "deterministicAddressing": false
+    }
+  }
+}
+```
+
+---
+
+## Get Wallet
+
+Retrieve wallet details by ID.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/wallets/550e8400-e29b-41d4-a716-446655440000
+```
+
+### Path Parameters
+
+<ParamField path="walletId" type="string" required>
+  Wallet UUID
+</ParamField>
+
+### Response
+
+Returns the same structure as Create Wallet.
+
+---
+
+## List Wallets
+
+List all wallets for the current tenant.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     "http://localhost:3000/api/v1/wallets?limit=20&offset=0"
+```
+
+### Query Parameters
+
+<ParamField query="limit" type="number" default="50">
+  Maximum number of wallets to return (max: 100)
+</ParamField>
+
+<ParamField query="offset" type="number" default="0">
+  Number of wallets to skip
+</ParamField>
+
+### Response
+
+```json
+{
+  "status": "success",
+  "stage": "completed",
+  "traceId": "...",
+  "data": {
+    "wallets": [
+      {
+        "id": "550e8400-e29b-41d4-a716-446655440000",
+        "publicKey": "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy",
+        "provider": "local-dev",
+        "status": "active",
+        "label": "trading-bot-1",
+        "createdAt": "2026-03-08T12:00:00.000Z"
+      }
+    ],
+    "total": 1,
+    "limit": 20,
+    "offset": 0
+  }
+}
+```
+
+---
+
+## Get Balance
+
+Retrieve SOL balance for a wallet.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/wallets/550e8400-e29b-41d4-a716-446655440000/balance
+```
+
+### Path Parameters
+
+<ParamField path="walletId" type="string" required>
+  Wallet UUID
+</ParamField>
+
+### Response
+
+<ResponseField name="lamports" type="number" required>
+  Balance in lamports (1 SOL = 1,000,000,000 lamports)
+</ResponseField>
+
+<ResponseField name="sol" type="number" required>
+  Balance in SOL (decimal)
+</ResponseField>
+
+```json
+{
+  "status": "success",
+  "stage": "completed",
+  "traceId": "...",
+  "data": {
+    "lamports": 1000000000,
+    "sol": 1.0
+  }
+}
+```
+
+---
+
+## Get Tokens
+
+List all SPL token balances for a wallet.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/wallets/550e8400-e29b-41d4-a716-446655440000/tokens
+```
+
+### Path Parameters
+
+<ParamField path="walletId" type="string" required>
+  Wallet UUID
+</ParamField>
+
+### Response
+
+<ResponseField name="tokens" type="array" required>
+  Array of token balances
+  <Expandable title="Token Object">
+    <ResponseField name="mint" type="string" required>
+      Token mint address (base58)
+    </ResponseField>
+    <ResponseField name="amount" type="string" required>
+      Token amount (as string to preserve precision)
+    </ResponseField>
+    <ResponseField name="decimals" type="number" required>
+      Token decimals
+    </ResponseField>
+    <ResponseField name="uiAmount" type="number">
+      Human-readable amount (with decimals applied)
+    </ResponseField>
+    <ResponseField name="tokenAccount" type="string">
+      Associated token account address
+    </ResponseField>
+  </Expandable>
+</ResponseField>
+
+```json
+{
+  "status": "success",
+  "stage": "completed",
+  "traceId": "...",
+  "data": {
+    "tokens": [
+      {
+        "mint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+        "amount": "1000000",
+        "decimals": 6,
+        "uiAmount": 1.0,
+        "tokenAccount": "3pXZ..."
+      }
+    ]
+  }
+}
+```
+
+---
+
+## Sign Message
+
+Sign a message or transaction with the wallet's private key.
+
+<CodeGroup>
+```bash Sign Transaction
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "transaction": "AQAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA..."
+  }' \
+  http://localhost:3000/api/v1/wallets/550e8400-e29b-41d4-a716-446655440000/sign
+```
+
+```bash Sign Message
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "message": "SGVsbG8gV29ybGQ="
+  }' \
+  http://localhost:3000/api/v1/wallets/550e8400-e29b-41d4-a716-446655440000/sign
+```
+</CodeGroup>
+
+### Path Parameters
+
+<ParamField path="walletId" type="string" required>
+  Wallet UUID
+</ParamField>
+
+### Request Body
+
+<ParamField body="transaction" type="string">
+  Base64-encoded transaction (mutually exclusive with `message`)
+</ParamField>
+
+<ParamField body="message" type="string">
+  Base64-encoded message (mutually exclusive with `transaction`)
+</ParamField>
+
+<Note>
+  Provide exactly one of `transaction` or `message`.
+</Note>
+
+### Response
+
+<ResponseField name="signature" type="string" required>
+  Base64-encoded signature
+</ResponseField>
+
+<ResponseField name="publicKey" type="string" required>
+  Base58-encoded public key used for signing
+</ResponseField>
+
+```json
+{
+  "status": "success",
+  "stage": "completed",
+  "traceId": "...",
+  "data": {
+    "signature": "3kZ8...",
+    "publicKey": "7xKLvUhXW9XqHZzN3Jw8wVHGK6R4tN2gqV9mP3kL5eXy"
+  }
+}
+```
+
+---
+
+## Signer Backends
+
+The wallet service supports multiple signer backends configured via environment variables:
+
+<Tabs>
+  <Tab title="Encrypted File">
+    **Best for:** Local development and prototyping
+    
+    ```bash
+    WALLET_SIGNER_BACKEND=encrypted-file
+    WALLET_KEY_ENCRYPTION_SECRET=your-secret-key
+    ```
+    
+    Keys are encrypted at rest using AES-256-GCM.
+  </Tab>
+  <Tab title="Memory">
+    **Best for:** Testing (non-persistent)
+    
+    ```bash
+    WALLET_SIGNER_BACKEND=memory
+    ```
+    
+    Keys are stored in memory only and lost on restart.
+  </Tab>
+  <Tab title="KMS">
+    **Best for:** Managed key governance and auditing
+    
+    ```bash
+    WALLET_SIGNER_BACKEND=kms
+    WALLET_KMS_MASTER_SECRET=your-kms-master-secret
+    WALLET_KMS_KEY_ID=optional-key-id
+    ```
+    
+    Integrates with key management services.
+  </Tab>
+  <Tab title="HSM">
+    **Best for:** Hardware-rooted custody and compliance
+    
+    ```bash
+    WALLET_SIGNER_BACKEND=hsm
+    WALLET_HSM_PIN=your-hsm-pin
+    WALLET_HSM_MODULE_SECRET=your-module-secret
+    WALLET_HSM_SLOT=optional-slot-number
+    ```
+    
+    Uses hardware security modules for signing.
+  </Tab>
+  <Tab title="MPC">
+    **Best for:** Distributed custody and threshold signing
+    
+    ```bash
+    WALLET_SIGNER_BACKEND=mpc
+    WALLET_MPC_NODE_SECRETS=secret1,secret2,secret3
+    # OR
+    WALLET_MPC_NODE1_SECRET=secret1
+    WALLET_MPC_NODE2_SECRET=secret2
+    WALLET_MPC_NODE3_SECRET=secret3
+    ```
+    
+    Splits key material across multiple nodes.
+  </Tab>
+</Tabs>
+
+## Security Considerations
+
+<Warning>
+  Private keys are never exposed via the API. All signing happens within the wallet engine boundary.
+</Warning>
+
+<Tip>
+  Use labels to identify wallets instead of storing public keys in your application.
+</Tip>
+
+**Best Practices:**
+1. Use appropriate signer backend for your security requirements
+2. Enable auto-fund only on devnet for testing
+3. Implement wallet balance monitoring
+4. Track wallet usage via audit events
+5. Regularly rotate encryption secrets for encrypted-file backend
+6. Use HSM or MPC backends for production custody

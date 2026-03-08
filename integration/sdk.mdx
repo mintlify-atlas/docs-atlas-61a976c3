@@ -1,0 +1,782 @@
+---
+title: 'SDK Integration'
+description: 'TypeScript SDK for programmatic access to the Agentic Wallet platform'
+icon: 'code'
+---
+
+## Overview
+
+The Agentic Wallet SDK provides a fully-typed TypeScript client for interacting with all platform capabilities. It wraps the REST API with convenient methods and handles authentication, error normalization, and response parsing.
+
+## Installation
+
+The SDK is available as `@agentic-wallet/sdk` in the monorepo.
+
+```bash Install in Monorepo
+npm install
+```
+
+For external projects:
+
+```bash
+# From the repository root
+cd packages/sdk
+npm pack
+# Install the generated tarball in your project
+```
+
+## Quick Start
+
+```typescript Basic Usage
+import { createAgenticWalletClient } from '@agentic-wallet/sdk';
+
+const client = createAgenticWalletClient('http://localhost:3000', {
+  apiKey: 'dev-api-key',
+  tenantId: 'my-tenant', // optional
+});
+
+// Create a wallet
+const wallet = await client.wallet.create({ label: 'trading-bot' });
+
+// Get balance
+const balance = await client.wallet.getBalance(wallet.walletId);
+console.log(`Balance: ${balance.sol} SOL`);
+
+// Create an agent
+const agent = await client.agent.create({
+  name: 'arb-bot',
+  walletId: wallet.walletId,
+  executionMode: 'autonomous',
+  allowedIntents: ['transfer_sol', 'swap', 'query_balance'],
+});
+
+// Execute an intent
+const result = await client.agent.execute(agent.agentId, {
+  type: 'query_balance',
+  protocol: 'system-program',
+  intent: {},
+  gasless: false,
+});
+```
+
+## Client Creation
+
+Create a client instance with authentication and configuration.
+
+```typescript Client Configuration
+const client = createAgenticWalletClient(
+  baseUrl: string,
+  options?: {
+    apiKey?: string;
+    tenantId?: string;
+    headers?: HeadersInit;
+  }
+);
+```
+
+**Parameters**:
+- `baseUrl`: API Gateway URL (e.g., `http://localhost:3000`)
+- `options.apiKey`: API key for authentication (sent as `x-api-key` header)
+- `options.tenantId`: Optional tenant identifier (sent as `x-tenant-id` header)
+- `options.headers`: Additional custom headers
+
+**Example**:
+
+```typescript
+const client = createAgenticWalletClient('https://api.example.com', {
+  apiKey: process.env.API_KEY,
+  tenantId: process.env.TENANT_ID,
+  headers: {
+    'x-custom-header': 'value',
+  },
+});
+```
+
+## SDK Modules
+
+The SDK client exposes the following modules:
+
+<CardGroup cols={2}>
+  <Card title="wallet" icon="wallet">
+    Wallet creation, balance, tokens, signing
+  </Card>
+  <Card title="policy" icon="shield">
+    Policy creation, evaluation, versioning
+  </Card>
+  <Card title="transaction" icon="receipt">
+    Transaction lifecycle, proofs, approvals
+  </Card>
+  <Card title="agent" icon="robot">
+    Agent management, execution, capabilities
+  </Card>
+  <Card title="protocol" icon="network-wired">
+    Protocol adapters, DeFi operations
+  </Card>
+  <Card title="risk" icon="triangle-exclamation">
+    Risk controls, chaos engineering
+  </Card>
+  <Card title="strategy" icon="chess">
+    Backtesting, paper trading
+  </Card>
+  <Card title="treasury" icon="building-columns">
+    Budget allocation, rebalancing
+  </Card>
+  <Card title="audit" icon="clipboard-list">
+    Audit events, metrics
+  </Card>
+  <Card title="mcp" icon="plug">
+    MCP tools and invocation
+  </Card>
+</CardGroup>
+
+## Wallet Module
+
+Manage wallet creation, balances, tokens, and signing operations.
+
+<CodeGroup>
+```typescript Create Wallet
+const wallet = await client.wallet.create({
+  label: 'trading-bot',      // optional
+  autoFund: true,             // optional, devnet only
+  fundLamports: 2000000,      // optional, auto-funding amount
+});
+
+console.log(wallet.walletId);
+console.log(wallet.publicKey);
+```
+
+```typescript List Wallets
+const wallets = await client.wallet.list();
+
+// Filter by public key
+const filtered = await client.wallet.list({ 
+  publicKey: 'base58-pubkey' 
+});
+
+// Find by public key
+const found = await client.wallet.findByPublicKey('base58-pubkey');
+```
+
+```typescript Get Wallet
+const wallet = await client.wallet.get(walletId);
+```
+
+```typescript Get Balance
+const balance = await client.wallet.getBalance(walletId);
+console.log(`${balance.sol} SOL (${balance.lamports} lamports)`);
+```
+
+```typescript Get Token Balances
+const { tokens } = await client.wallet.getTokens(walletId);
+
+for (const token of tokens) {
+  console.log(`${token.mint}: ${token.uiAmount} (${token.amount})`);
+}
+```
+
+```typescript Sign Message
+const signature = await client.wallet.signMessage(
+  walletId,
+  messageBase64
+);
+
+console.log(signature.signatureBase58);
+```
+
+```typescript Sign Transaction
+const signed = await client.wallet.signTransaction(
+  walletId,
+  transactionBase64
+);
+
+console.log(signed.signature);
+console.log(signed.txVersion); // 'legacy' | 'v0'
+```
+</CodeGroup>
+
+## Policy Module
+
+Create and manage wallet policies with versioning and evaluation.
+
+<CodeGroup>
+```typescript Create Policy
+const policy = await client.policy.create({
+  walletId: wallet.walletId,
+  name: 'spending-limits',
+  active: true,
+  rules: [
+    {
+      type: 'spending_limit',
+      maxLamportsPerTx: 1000000,
+      maxLamportsPerDay: 10000000,
+      requireApprovalAboveLamports: 500000,
+    },
+    {
+      type: 'protocol_allowlist',
+      protocols: ['system-program', 'jupiter'],
+    },
+  ],
+});
+```
+
+```typescript List Policies
+const policies = await client.policy.list(walletId);
+```
+
+```typescript Policy Versions
+const versions = await client.policy.listVersions(policyId);
+
+const version = await client.policy.getVersion(policyId, 1);
+```
+
+```typescript Migrate Policy
+const updated = await client.policy.migrate(policyId, {
+  targetVersion: 2,
+  mode: 'safe', // optional
+});
+```
+
+```typescript Compatibility Check
+const check = await client.policy.compatibilityCheck({
+  rules: [
+    { type: 'spending_limit', maxLamports: 1000000 },
+  ],
+});
+
+console.log(check.compatible);
+console.log(check.unsupportedRuleTypes);
+```
+
+```typescript Evaluate Policy
+const decision = await client.policy.evaluate({
+  walletId: wallet.walletId,
+  type: 'transfer_sol',
+  protocol: 'system-program',
+  destination: 'target-pubkey',
+  amountLamports: 500000,
+});
+
+console.log(decision.decision); // 'allow' | 'deny' | 'require_approval'
+```
+</CodeGroup>
+
+## Transaction Module
+
+Manage the complete transaction lifecycle from creation to confirmation.
+
+<CodeGroup>
+```typescript Create Transaction
+const tx = await client.transaction.create({
+  walletId: wallet.walletId,
+  type: 'transfer_sol',
+  protocol: 'system-program',
+  intent: {
+    destination: 'recipient-pubkey',
+    lamports: 1000000,
+  },
+  agentId: agent.agentId,  // optional
+  gasless: false,          // optional
+  idempotencyKey: 'unique-key', // optional
+});
+
+console.log(tx.txId);
+```
+
+```typescript Get Transaction
+const tx = await client.transaction.get(txId);
+
+console.log(tx.status);
+console.log(tx.signature);
+```
+
+```typescript Transaction Proof
+const proof = await client.transaction.getProof(txId);
+
+console.log(proof.intentHash);
+console.log(proof.policyHash);
+console.log(proof.simulationHash);
+```
+
+```typescript Replay Transaction
+const replay = await client.transaction.replay(txId);
+```
+
+```typescript Retry Transaction
+const retried = await client.transaction.retry(txId);
+```
+
+```typescript Approve/Reject
+await client.transaction.approve(txId);
+await client.transaction.reject(txId);
+```
+
+```typescript List Transactions
+const txs = await client.transaction.listByWallet(walletId);
+
+const pending = await client.transaction.listPendingApprovals(walletId);
+
+const positions = await client.transaction.listPositions(walletId);
+
+const escrows = await client.transaction.listEscrows(walletId);
+```
+</CodeGroup>
+
+## Agent Module
+
+Create and manage AI agents with capabilities and execution modes.
+
+<CodeGroup>
+```typescript Create Agent
+const agent = await client.agent.create({
+  name: 'trading-bot',
+  walletId: wallet.walletId,
+  executionMode: 'autonomous', // or 'supervised'
+  allowedIntents: [
+    'transfer_sol',
+    'swap',
+    'query_balance',
+  ],
+  budgetLamports: 10000000, // optional
+  autonomy: {               // optional, for autonomous mode
+    enabled: true,
+    mode: 'execute',        // or 'paper'
+    cadenceSeconds: 30,
+    maxActionsPerHour: 60,
+    steps: [
+      {
+        id: 'step-1',
+        type: 'swap',
+        protocol: 'jupiter',
+        intent: {
+          inputMint: 'SOL_MINT',
+          outputMint: 'USDC_MINT',
+          amount: '1000000',
+          slippageBps: 50,
+        },
+        cooldownSeconds: 30,
+        maxRuns: 100,
+      },
+    ],
+  },
+});
+```
+
+```typescript List & Get Agents
+const agents = await client.agent.list();
+
+const agent = await client.agent.get(agentId);
+```
+
+```typescript Update Capabilities
+const updated = await client.agent.updateCapabilities(agentId, {
+  allowedIntents: ['transfer_sol', 'swap'],
+  executionMode: 'supervised',
+});
+```
+
+```typescript Agent Lifecycle
+await client.agent.start(agentId);
+await client.agent.stop(agentId);
+await client.agent.pause(agentId, 'manual review');
+await client.agent.resume(agentId);
+```
+
+```typescript Agent Budget
+const budget = await client.agent.budget(agentId);
+
+if (budget) {
+  console.log(`Available: ${budget.availableLamports}`);
+  console.log(`Spent: ${budget.spentLamports}`);
+}
+```
+
+```typescript Agent Manifests
+const manifest = await client.agent.issueManifest(agentId, {
+  allowedIntents: ['transfer_sol', 'swap'],
+  allowedProtocols: ['system-program', 'jupiter'],
+  ttlSeconds: 3600,
+});
+
+const verification = await client.agent.verifyManifest(agentId, {
+  manifest: manifest,
+});
+
+console.log(verification.ok);
+```
+
+```typescript Execute Intent
+const result = await client.agent.execute(agentId, {
+  type: 'swap',
+  protocol: 'jupiter',
+  intent: {
+    inputMint: 'SOL_MINT',
+    outputMint: 'USDC_MINT',
+    amount: '1000000',
+    slippageBps: 50,
+  },
+  gasless: false,
+});
+```
+</CodeGroup>
+
+## Protocol Module
+
+Interact with protocol adapters for DeFi operations.
+
+<CodeGroup>
+```typescript List Protocols
+const protocols = await client.protocol.list();
+
+for (const p of protocols) {
+  console.log(`${p.protocol}: ${p.capabilities.join(', ')}`);
+}
+```
+
+```typescript Get Protocol Capabilities
+const caps = await client.protocol.capabilities('jupiter');
+
+console.log(caps.capabilities);
+console.log(caps.programIds);
+```
+
+```typescript Get Quote
+const quote = await client.protocol.quote({
+  protocol: 'jupiter',
+  inputMint: 'SOL_MINT',
+  outputMint: 'USDC_MINT',
+  amount: '1000000',
+  walletAddress: wallet.publicKey,
+  slippageBps: 50,
+});
+```
+
+```typescript Swap
+const swap = await client.protocol.swap({
+  protocol: 'jupiter',
+  inputMint: 'SOL_MINT',
+  outputMint: 'USDC_MINT',
+  amount: '1000000',
+  walletAddress: wallet.publicKey,
+  slippageBps: 50,
+});
+```
+
+```typescript Staking
+const stake = await client.protocol.stake({
+  protocol: 'marinade',
+  walletAddress: wallet.publicKey,
+  amount: '5000000',
+  validator: 'validator-pubkey', // optional
+});
+
+const unstake = await client.protocol.unstake({
+  protocol: 'marinade',
+  walletAddress: wallet.publicKey,
+  amount: '5000000',
+});
+```
+
+```typescript Lending
+const supply = await client.protocol.lendSupply({
+  protocol: 'solend',
+  walletAddress: wallet.publicKey,
+  mint: 'USDC_MINT',
+  amount: '10000000',
+});
+
+const borrow = await client.protocol.lendBorrow({
+  protocol: 'solend',
+  walletAddress: wallet.publicKey,
+  mint: 'USDC_MINT',
+  amount: '5000000',
+});
+```
+
+```typescript Escrow Operations
+const create = await client.protocol.escrowCreate({
+  protocol: 'escrow',
+  walletAddress: wallet.publicKey,
+  intent: {
+    escrowNumericId: '900001',
+    counterparty: 'recipient-pubkey',
+    amount: '10000000',
+    terms: 'Escrow terms',
+  },
+});
+
+const accept = await client.protocol.escrowAccept('escrow-id', {
+  protocol: 'escrow',
+  walletAddress: wallet.publicKey,
+});
+
+const release = await client.protocol.escrowRelease('escrow-id', {
+  protocol: 'escrow',
+  walletAddress: wallet.publicKey,
+});
+```
+</CodeGroup>
+
+## Risk Module
+
+Manage protocol risk profiles, portfolio controls, and chaos engineering.
+
+<CodeGroup>
+```typescript Protocol Risk
+const protocols = await client.risk.listProtocols();
+
+const jupiterRisk = await client.risk.getProtocol('jupiter');
+
+await client.risk.setProtocol('jupiter', {
+  maxSlippageBps: 100,
+  maxPoolConcentrationBps: 5000,
+  requireOracleForSwap: true,
+});
+```
+
+```typescript Portfolio Risk
+const portfolios = await client.risk.listPortfolioControls();
+
+const walletControls = await client.risk.getPortfolioControls(walletId);
+
+await client.risk.setPortfolioControls(walletId, {
+  maxDrawdownLamports: 50000000,
+  maxDailyLossLamports: 10000000,
+  maxExposureBpsPerToken: 2500,
+  autoPauseOnBreach: true,
+});
+```
+
+```typescript Chaos Engineering
+const chaos = await client.risk.getChaos();
+
+await client.risk.setChaos({
+  enabled: false,
+  failureRates: {
+    simulation: 0.0,
+  },
+  latencyMs: 0,
+});
+```
+</CodeGroup>
+
+## Strategy Module
+
+Backtest strategies and execute paper trades.
+
+<CodeGroup>
+```typescript Backtest
+const result = await client.strategy.backtest({
+  walletId: wallet.walletId,
+  name: 'arbitrage-test',
+  minimumPassRate: 0.8,
+  steps: [
+    {
+      type: 'query_balance',
+      protocol: 'system-program',
+      intent: {},
+      timestamp: new Date().toISOString(),
+    },
+    {
+      type: 'swap',
+      protocol: 'jupiter',
+      intent: {
+        inputMint: 'SOL_MINT',
+        outputMint: 'USDC_MINT',
+        amount: '1000000',
+      },
+      timestamp: new Date().toISOString(),
+      simulatedPnlLamports: 50000,
+    },
+  ],
+});
+
+console.log(result.passRate);
+console.log(result.totalPnl);
+```
+
+```typescript Paper Trading
+const paper = await client.strategy.paperExecute({
+  agentId: agent.agentId,
+  walletId: wallet.walletId,
+  type: 'swap',
+  protocol: 'jupiter',
+  intent: {
+    inputMint: 'SOL_MINT',
+    outputMint: 'USDC_MINT',
+    amount: '1000000',
+  },
+});
+
+const ledger = await client.strategy.paperList(agent.agentId);
+```
+</CodeGroup>
+
+## Treasury Module
+
+Manage agent budgets and treasury operations.
+
+```typescript Treasury Operations
+await client.treasury.allocate({
+  targetAgentId: agent.agentId,
+  lamports: 10000000,
+  sourceAgentId: 'treasury-agent-id', // optional
+  reason: 'Initial allocation',       // optional
+});
+
+await client.treasury.rebalance({
+  sourceAgentId: 'agent-a-id',
+  targetAgentId: 'agent-b-id',
+  lamports: 5000000,
+  reason: 'Monthly rebalance',
+});
+```
+
+## Audit Module
+
+Query audit events and metrics.
+
+<CodeGroup>
+```typescript List Events
+const events = await client.audit.listEvents({
+  txId: 'transaction-id',      // optional
+  agentId: 'agent-id',         // optional
+  walletId: 'wallet-id',       // optional
+  protocol: 'jupiter',         // optional
+  escrowId: 'escrow-id',       // optional
+});
+
+for (const event of events) {
+  console.log(`${event.timestamp}: ${event.eventType}`);
+}
+```
+
+```typescript Get Metrics
+const metrics = await client.audit.metrics();
+
+console.log(metrics['tx.created']);
+console.log(metrics['tx.confirmed']);
+console.log(metrics['agent.executions']);
+```
+</CodeGroup>
+
+## MCP Module
+
+Invoke MCP tools for AI agent integration.
+
+<CodeGroup>
+```typescript List Tools
+const tools = await client.mcp.tools();
+
+for (const tool of tools) {
+  console.log(`${tool.name}: ${tool.description}`);
+}
+```
+
+```typescript Call Tool
+const balance = await client.mcp.call('wallet.balance', {
+  walletId: wallet.walletId,
+});
+
+const txResult = await client.mcp.call('tx.create', {
+  walletId: wallet.walletId,
+  type: 'transfer_sol',
+  protocol: 'system-program',
+  intent: {
+    destination: 'recipient-pubkey',
+    lamports: 1000000,
+  },
+});
+```
+</CodeGroup>
+
+## Error Handling
+
+The SDK normalizes errors using the stable envelope format.
+
+```typescript Error Handling
+try {
+  const tx = await client.transaction.create({
+    walletId: wallet.walletId,
+    type: 'transfer_sol',
+    protocol: 'system-program',
+    intent: {
+      destination: 'invalid-pubkey',
+      lamports: 1000000,
+    },
+  });
+} catch (error) {
+  console.error(error.message);
+  // Error format: "<message> code=<errorCode> stage=<failedAt> traceId=<traceId>"
+  
+  // Example:
+  // "Invalid destination address code=VALIDATION_ERROR stage=validation traceId=abc-123"
+}
+```
+
+**Error codes**:
+- `VALIDATION_ERROR` - Input validation failure
+- `POLICY_VIOLATION` - Policy denied the operation
+- `PIPELINE_ERROR` - Build/sign/send/runtime failure
+- `CONFIRMATION_FAILED` - Transaction confirmation failure
+
+**Failure stages**:
+- `validation` - Input validation
+- `policy` - Policy evaluation
+- `build` - Transaction construction
+- `sign` - Signing operation
+- `send` - RPC submission
+- `confirm` - Transaction confirmation
+- `gateway` - Gateway-level error
+
+## TypeScript Types
+
+The SDK is fully typed with interfaces from `@agentic-wallet/common`.
+
+```typescript Common Types
+import type {
+  Agent,
+  CreateAgentRequest,
+  Policy,
+  CreatePolicyRequest,
+  TransactionType,
+  WalletMetadata,
+  PolicyDecision,
+} from '@agentic-wallet/common';
+```
+
+**Transaction Types**:
+```typescript
+type TransactionType =
+  | 'transfer_sol'
+  | 'transfer_spl'
+  | 'swap'
+  | 'stake'
+  | 'unstake'
+  | 'lend_supply'
+  | 'lend_borrow'
+  | 'create_mint'
+  | 'mint_token'
+  | 'query_balance'
+  | 'query_positions'
+  | 'create_escrow'
+  | 'accept_escrow'
+  | 'release_escrow'
+  // ... and more
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="CLI Integration" icon="terminal" href="/integration/cli">
+    Use the command-line interface
+  </Card>
+  <Card title="MCP Tools" icon="plug" href="/integration/mcp">
+    Integrate with MCP server
+  </Card>
+  <Card title="SKILLS Contract" icon="file-contract" href="/integration/skills">
+    Review agent integration contract
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/overview">
+    Explore REST API endpoints
+  </Card>
+</CardGroup>

@@ -1,0 +1,533 @@
+---
+title: 'Multi-Agent Orchestration'
+description: 'Coordinate multiple autonomous agents with independent wallets and budgets'
+icon: 'users'
+---
+
+Agentic Wallet supports managing multiple AI agents simultaneously, each with independent wallets, capabilities, and budget controls. This enables complex multi-agent workflows with treasury management and coordinated actions.
+
+## Overview
+
+Multi-agent orchestration provides:
+
+- **Independent Wallets**: Each agent has its own custody boundary
+- **Capability Isolation**: Per-agent intent and protocol allowlists
+- **Budget Management**: Treasury allocation and rebalancing between agents
+- **Autonomous Coordination**: Agents can transfer funds and trigger workflows
+- **Execution Modes**: Supervised or fully autonomous operation
+
+<Note>
+The demo script `scripts/devnet-multi-agent.ts` showcases a complete multi-agent workflow.
+</Note>
+
+## Creating Multiple Agents
+
+Each agent requires a wallet, capabilities, and execution mode configuration.
+
+### Agent Creation Workflow
+
+<Steps>
+  <Step title="Create first agent">
+    ```bash
+    curl -X POST http://localhost:3000/api/v1/agents \
+      -H 'x-api-key: dev-api-key' \
+      -H 'content-type: application/json' \
+      -d '{
+        "name": "agent-alpha",
+        "allowedIntents": ["transfer_sol", "query_balance"],
+        "executionMode": "autonomous"
+      }'
+    ```
+    
+    Response includes:
+    ```json
+    {
+      "data": {
+        "id": "<agent-id>",
+        "walletId": "<wallet-id>",
+        "name": "agent-alpha",
+        "status": "created"
+      }
+    }
+    ```
+  </Step>
+
+  <Step title="Create second agent">
+    ```bash
+    curl -X POST http://localhost:3000/api/v1/agents \
+      -H 'x-api-key: dev-api-key' \
+      -H 'content-type: application/json' \
+      -d '{
+        "name": "agent-beta",
+        "allowedIntents": ["transfer_sol", "query_balance", "swap"],
+        "allowedProtocols": ["system-program", "jupiter"],
+        "executionMode": "supervised"
+      }'
+    ```
+  </Step>
+
+  <Step title="Start both agents">
+    ```bash
+    curl -X POST http://localhost:3000/api/v1/agents/<agent-alpha-id>/start \
+      -H 'x-api-key: dev-api-key'
+    
+    curl -X POST http://localhost:3000/api/v1/agents/<agent-beta-id>/start \
+      -H 'x-api-key: dev-api-key'
+    ```
+  </Step>
+</Steps>
+
+### Using the SDK
+
+```typescript
+import { AgenticWalletSDK } from '@agentic-wallet/sdk';
+
+const client = new AgenticWalletSDK(
+  'http://localhost:3000',
+  { 'x-api-key': 'dev-api-key' }
+);
+
+// Create multiple agents in parallel
+const [agentA, agentB] = await Promise.all([
+  client.agents.create({
+    name: 'agent-alpha',
+    allowedIntents: ['transfer_sol', 'query_balance'],
+    executionMode: 'autonomous',
+  }),
+  client.agents.create({
+    name: 'agent-beta',
+    allowedIntents: ['transfer_sol', 'query_balance', 'swap'],
+    allowedProtocols: ['system-program', 'jupiter'],
+    executionMode: 'autonomous',
+  }),
+]);
+
+// Start both agents
+await Promise.all([
+  client.agents.start(agentA.id),
+  client.agents.start(agentB.id),
+]);
+```
+
+## Treasury Allocation
+
+Distribute funds from a treasury source to agent wallets.
+
+### Direct Allocation
+
+Allocate SOL to an agent without a source (increases total budget):
+
+```bash
+curl -X POST http://localhost:3000/api/v1/treasury/allocate \
+  -H 'x-api-key: dev-api-key' \
+  -H 'content-type: application/json' \
+  -d '{
+    "targetAgentId": "<agent-id>",
+    "lamports": 1000000,
+    "reason": "Initial agent budget"
+  }'
+```
+
+### Allocation from Source Agent
+
+```bash
+curl -X POST http://localhost:3000/api/v1/treasury/allocate \
+  -H 'x-api-key: dev-api-key' \
+  -H 'content-type: application/json' \
+  -d '{
+    "sourceAgentId": "<treasury-agent-id>",
+    "targetAgentId": "<recipient-agent-id>",
+    "lamports": 5000000,
+    "reason": "Allocated for swap operations"
+  }'
+```
+
+<Accordion title="CLI Command">
+```bash
+npm run cli -- treasury allocate \
+  --target-agent-id <agent-id> \
+  --lamports 1000000 \
+  --reason "Initial budget"
+```
+</Accordion>
+
+## Budget Rebalancing
+
+Transfer budget between agents to optimize capital allocation.
+
+### Rebalance Workflow
+
+```bash
+curl -X POST http://localhost:3000/api/v1/treasury/rebalance \
+  -H 'x-api-key: dev-api-key' \
+  -H 'content-type: application/json' \
+  -d '{
+    "sourceAgentId": "<agent-a-id>",
+    "targetAgentId": "<agent-b-id>",
+    "lamports": 500000
+  }'
+```
+
+Response:
+```json
+{
+  "data": {
+    "sourceAgentId": "<agent-a-id>",
+    "targetAgentId": "<agent-b-id>",
+    "lamports": 500000,
+    "sourceBudgetBefore": 1000000,
+    "sourceBudgetAfter": 500000,
+    "targetBudgetBefore": 200000,
+    "targetBudgetAfter": 700000
+  }
+}
+```
+
+### Using the SDK
+
+```typescript
+const result = await client.treasury.rebalance({
+  sourceAgentId: agentA.id,
+  targetAgentId: agentB.id,
+  lamports: 500_000,
+});
+
+console.log(`Rebalanced ${result.lamports} lamports`);
+console.log(`Source budget: ${result.sourceBudgetAfter}`);
+console.log(`Target budget: ${result.targetBudgetAfter}`);
+```
+
+<Warning>
+Rebalancing only adjusts budget tracking. You must separately execute on-chain transfers if physical SOL movement is required.
+</Warning>
+
+## Coordinating Agent Capabilities
+
+### Capability Profiles
+
+Design agents with specialized roles:
+
+<CodeGroup>
+```json Trader Agent
+{
+  "name": "trader-agent",
+  "allowedIntents": [
+    "swap",
+    "query_balance",
+    "transfer_sol"
+  ],
+  "allowedProtocols": [
+    "jupiter",
+    "orca",
+    "raydium"
+  ],
+  "executionMode": "autonomous",
+  "budgetLamports": 10000000
+}
+```
+
+```json Treasury Agent
+{
+  "name": "treasury-agent",
+  "allowedIntents": [
+    "transfer_sol",
+    "query_balance"
+  ],
+  "allowedProtocols": [
+    "system-program"
+  ],
+  "executionMode": "supervised",
+  "budgetLamports": 100000000
+}
+```
+
+```json Escrow Agent
+{
+  "name": "escrow-agent",
+  "allowedIntents": [
+    "create_escrow",
+    "release_escrow",
+    "accept_escrow"
+  ],
+  "allowedProtocols": [
+    "escrow"
+  ],
+  "executionMode": "autonomous",
+  "budgetLamports": 5000000
+}
+```
+</CodeGroup>
+
+### Updating Capabilities
+
+```bash
+curl -X PUT http://localhost:3000/api/v1/agents/<agent-id>/capabilities \
+  -H 'x-api-key: dev-api-key' \
+  -H 'content-type: application/json' \
+  -d '{
+    "allowedIntents": ["transfer_sol", "query_balance", "stake"],
+    "allowedProtocols": ["system-program", "marinade"]
+  }'
+```
+
+## Autonomous Coordination Example
+
+The `devnet-multi-agent.ts` script demonstrates end-to-end orchestration:
+
+```typescript
+// Create two agents
+const [a1, a2] = await Promise.all([
+  createAgent('agent-alpha'),
+  createAgent('agent-beta')
+]);
+
+// Start both agents
+await Promise.all([
+  startAgent(a1.data.id),
+  startAgent(a2.data.id),
+]);
+
+// Fund agent-alpha wallet from treasury
+const fundTx = new Transaction().add(
+  SystemProgram.transfer({
+    fromPubkey: treasuryKeypair.publicKey,
+    toPubkey: new PublicKey(a1.walletPublicKey),
+    lamports: 2_000_000,
+  }),
+);
+await sendAndConfirmTransaction(connection, fundTx, [treasuryKeypair]);
+
+// Agent-alpha autonomously transfers to agent-beta
+const executeRes = await fetch(
+  `${apiBase}/api/v1/agents/${a1.data.id}/execute`,
+  {
+    method: 'POST',
+    headers: { 'content-type': 'application/json', 'x-api-key': apiKey },
+    body: JSON.stringify({
+      type: 'transfer_sol',
+      protocol: 'system-program',
+      intent: {
+        destination: a2.walletPublicKey,
+        lamports: 1_000_000,
+      },
+    }),
+  }
+);
+
+// Verify transaction confirmed
+const result = await executeRes.json();
+assert(result.data.status === 'confirmed');
+
+// Stop both agents
+await Promise.all([
+  stopAgent(a1.data.id),
+  stopAgent(a2.data.id),
+]);
+```
+
+### Running the Demo
+
+```bash
+# Set PRIVATE_KEY for devnet treasury funding
+export PRIVATE_KEY="<your-base58-private-key>"
+
+npm run devnet:multi-agent
+```
+
+Expected output:
+```
+Created agent-alpha: <agent-id-1>
+Created agent-beta: <agent-id-2>
+Funded agent-alpha with 2 SOL
+Agent-alpha transferred 1 SOL to agent-beta
+Transaction confirmed: <signature>
+```
+
+## Budget Management
+
+### Query Agent Budget
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/agents/<agent-id>/budget
+```
+
+Response:
+```json
+{
+  "data": {
+    "agentId": "<agent-id>",
+    "walletId": "<wallet-id>",
+    "budgetLamports": 1000000,
+    "spentLamports": 250000,
+    "remainingLamports": 750000,
+    "lastUpdated": "2026-03-08T12:00:00.000Z"
+  }
+}
+```
+
+### Budget Enforcement
+
+Agents automatically reject intents that exceed remaining budget:
+
+```json
+{
+  "status": "failure",
+  "errorCode": "POLICY_VIOLATION",
+  "failedAt": "policy",
+  "message": "Agent budget exceeded (remaining: 50000, required: 100000)"
+}
+```
+
+## Advanced Patterns
+
+### Leader-Follower Architecture
+
+```typescript
+// Leader agent coordinates strategy
+const leader = await client.agents.create({
+  name: 'leader-agent',
+  allowedIntents: ['transfer_sol', 'query_balance'],
+  executionMode: 'autonomous',
+  autonomy: {
+    enabled: true,
+    mode: 'execute',
+    cadenceSeconds: 60,
+    rules: [
+      {
+        id: 'distribute-to-followers',
+        when: [{ metric: 'balance_lamports', op: 'gt', value: 10_000_000 }],
+        then: {
+          type: 'transfer_sol',
+          protocol: 'system-program',
+          intent: {
+            destination: '{{knownWallet0}}',
+            lamports: 1_000_000,
+          },
+        },
+        maxRuns: 5,
+        cooldownSeconds: 300,
+      },
+    ],
+  },
+});
+
+// Follower agents execute specialized tasks
+const followers = await Promise.all([
+  client.agents.create({
+    name: 'follower-swap',
+    allowedIntents: ['swap'],
+    allowedProtocols: ['jupiter'],
+    executionMode: 'autonomous',
+  }),
+  client.agents.create({
+    name: 'follower-stake',
+    allowedIntents: ['stake'],
+    allowedProtocols: ['marinade'],
+    executionMode: 'autonomous',
+  }),
+]);
+```
+
+### Round-Robin Load Distribution
+
+```typescript
+const agents = await Promise.all(
+  Array.from({ length: 5 }, (_, i) =>
+    client.agents.create({
+      name: `worker-${i}`,
+      allowedIntents: ['transfer_sol'],
+      executionMode: 'autonomous',
+    })
+  )
+);
+
+let currentIndex = 0;
+
+function getNextAgent() {
+  const agent = agents[currentIndex];
+  currentIndex = (currentIndex + 1) % agents.length;
+  return agent;
+}
+
+for (const task of tasks) {
+  const agent = getNextAgent();
+  await client.agents.execute(agent.id, {
+    type: 'transfer_sol',
+    protocol: 'system-program',
+    intent: task,
+  });
+}
+```
+
+## Observability
+
+### Agent Audit Trail
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  'http://localhost:3000/api/v1/audit/events?agentId=<agent-id>&limit=50'
+```
+
+### Transaction History per Agent
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/wallets/<wallet-id>/transactions
+```
+
+### Multi-Agent Metrics
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/metrics
+```
+
+Filters available:
+- `agentId`
+- `protocol`
+- `status` (confirmed/failed)
+- `startDate`/`endDate`
+
+## Security Considerations
+
+<Warning>
+**Multi-Agent Security Best Practices:**
+- Use separate API keys per agent for revocability
+- Set conservative budget caps on autonomous agents
+- Require approval gates for high-value operations
+- Monitor cross-agent transfer patterns for anomalies
+- Implement rate limits per agent
+</Warning>
+
+### Capability Manifests
+
+For production deployments, issue signed manifests:
+
+```bash
+curl -X POST http://localhost:3000/api/v1/agents/<agent-id>/manifest/issue \
+  -H 'x-api-key: dev-api-key' \
+  -H 'content-type: application/json' \
+  -d '{
+    "intents": ["transfer_sol", "swap"],
+    "protocols": ["system-program", "jupiter"],
+    "ttl": 3600
+  }'
+```
+
+Enable enforcement:
+```bash
+AGENT_REQUIRE_MANIFEST=true
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Strategy Backtesting" icon="chart-line" href="/guides/strategy-backtesting">
+    Test multi-agent strategies before live deployment
+  </Card>
+  
+  <Card title="Gasless Transactions" icon="bolt" href="/guides/gasless-transactions">
+    Enable gasless execution for agent operations
+  </Card>
+</CardGroup>

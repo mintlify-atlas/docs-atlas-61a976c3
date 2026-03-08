@@ -1,0 +1,542 @@
+---
+title: 'Audit & Metrics'
+description: 'Audit event tracking and metrics collection'
+icon: 'chart-line'
+---
+
+## Create Audit Event
+
+Create a custom audit event.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "entityType": "transaction",
+    "entityId": "123e4567-e89b-12d3-a456-426614174000",
+    "eventType": "transaction.created",
+    "txId": "123e4567-e89b-12d3-a456-426614174000",
+    "walletId": "550e8400-e29b-41d4-a716-446655440000",
+    "payload": {
+      "type": "transfer_sol",
+      "amount": 1000000
+    }
+  }' \
+  http://localhost:3000/api/v1/audit/events
+```
+
+### Request Body
+
+<ParamField body="entityType" type="enum" required>
+  Entity type: `transaction`, `wallet`, `agent`, `policy`, `escrow`, `system`
+</ParamField>
+
+<ParamField body="entityId" type="string" required>
+  Entity identifier (UUID or string)
+</ParamField>
+
+<ParamField body="eventType" type="string" required>
+  Event type identifier (e.g., `transaction.created`, `agent.started`)
+</ParamField>
+
+<ParamField body="txId" type="string">
+  Optional transaction UUID for correlation
+</ParamField>
+
+<ParamField body="walletId" type="string">
+  Optional wallet UUID for correlation
+</ParamField>
+
+<ParamField body="agentId" type="string">
+  Optional agent UUID for correlation
+</ParamField>
+
+<ParamField body="protocol" type="string">
+  Optional protocol name for correlation
+</ParamField>
+
+<ParamField body="escrowId" type="string">
+  Optional escrow ID for correlation
+</ParamField>
+
+<ParamField body="payload" type="object" required>
+  Event-specific data (flexible schema)
+</ParamField>
+
+### Response
+
+<ResponseField name="id" type="string" required>
+  Audit event UUID
+</ResponseField>
+
+<ResponseField name="entityType" type="string" required>
+  Entity type
+</ResponseField>
+
+<ResponseField name="entityId" type="string" required>
+  Entity ID
+</ResponseField>
+
+<ResponseField name="eventType" type="string" required>
+  Event type
+</ResponseField>
+
+<ResponseField name="timestamp" type="string" required>
+  ISO 8601 timestamp (server-assigned)
+</ResponseField>
+
+<ResponseField name="payload" type="object" required>
+  Event payload
+</ResponseField>
+
+```json
+{
+  "status": "success",
+  "data": {
+    "id": "abc123-def456-...",
+    "entityType": "transaction",
+    "entityId": "123e4567-e89b-12d3-a456-426614174000",
+    "eventType": "transaction.created",
+    "timestamp": "2026-03-08T12:00:00.000Z",
+    "txId": "123e4567-e89b-12d3-a456-426614174000",
+    "walletId": "550e8400-e29b-41d4-a716-446655440000",
+    "payload": {
+      "type": "transfer_sol",
+      "amount": 1000000
+    }
+  }
+}
+```
+
+<Info>
+  Most audit events are created automatically by the system. This endpoint is for custom application events.
+</Info>
+
+---
+
+## Query Audit Events
+
+Query audit events with filters.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     "http://localhost:3000/api/v1/audit/events?txId=123e4567-e89b-12d3-a456-426614174000"
+```
+
+### Query Parameters
+
+<ParamField query="txId" type="string">
+  Filter by transaction UUID
+</ParamField>
+
+<ParamField query="walletId" type="string">
+  Filter by wallet UUID
+</ParamField>
+
+<ParamField query="agentId" type="string">
+  Filter by agent UUID
+</ParamField>
+
+<ParamField query="protocol" type="string">
+  Filter by protocol name
+</ParamField>
+
+<ParamField query="escrowId" type="string">
+  Filter by escrow ID
+</ParamField>
+
+<ParamField query="entityType" type="enum">
+  Filter by entity type: `transaction`, `wallet`, `agent`, `policy`, `escrow`, `system`
+</ParamField>
+
+<ParamField query="eventType" type="string">
+  Filter by event type (e.g., `transaction.created`)
+</ParamField>
+
+<ParamField query="limit" type="number" default="50">
+  Maximum events to return (max: 100)
+</ParamField>
+
+<ParamField query="offset" type="number" default="0">
+  Number of events to skip
+</ParamField>
+
+<ParamField query="since" type="string">
+  Filter events after timestamp (ISO 8601)
+</ParamField>
+
+<ParamField query="until" type="string">
+  Filter events before timestamp (ISO 8601)
+</ParamField>
+
+### Response
+
+```json
+{
+  "status": "success",
+  "data": {
+    "events": [
+      {
+        "id": "abc123-def456-...",
+        "entityType": "transaction",
+        "entityId": "123e4567-e89b-12d3-a456-426614174000",
+        "eventType": "transaction.stage_change",
+        "timestamp": "2026-03-08T12:00:01.000Z",
+        "txId": "123e4567-e89b-12d3-a456-426614174000",
+        "payload": {
+          "from": "pending",
+          "to": "simulating"
+        }
+      }
+    ],
+    "total": 15,
+    "limit": 50,
+    "offset": 0
+  }
+}
+```
+
+---
+
+## Common Event Types
+
+<Tabs>
+  <Tab title="Transaction Events">
+    | Event Type | Description |
+    |------------|-------------|
+    | `transaction.created` | Transaction created |
+    | `transaction.stage_change` | Stage changed |
+    | `transaction.policy_evaluated` | Policy evaluation completed |
+    | `transaction.approved` | Manually approved |
+    | `transaction.rejected` | Manually rejected |
+    | `transaction.signed` | Transaction signed |
+    | `transaction.submitted` | Submitted to network |
+    | `transaction.confirmed` | Confirmed on-chain |
+    | `transaction.failed` | Transaction failed |
+    | `transaction.retried` | Retry attempted |
+  </Tab>
+  <Tab title="Wallet Events">
+    | Event Type | Description |
+    |------------|-------------|
+    | `wallet.created` | Wallet created |
+    | `wallet.balance_checked` | Balance queried |
+    | `wallet.tokens_queried` | Token balances queried |
+    | `wallet.signed` | Message/transaction signed |
+    | `wallet.disabled` | Wallet disabled |
+  </Tab>
+  <Tab title="Agent Events">
+    | Event Type | Description |
+    |------------|-------------|
+    | `agent.created` | Agent created |
+    | `agent.started` | Agent started |
+    | `agent.stopped` | Agent stopped |
+    | `agent.paused` | Agent paused |
+    | `agent.resumed` | Agent resumed |
+    | `agent.capabilities_updated` | Capabilities changed |
+    | `agent.budget_allocated` | Budget allocated |
+    | `agent.budget_exceeded` | Budget limit exceeded |
+    | `agent.manifest_issued` | Capability manifest issued |
+    | `agent.executed_intent` | Intent executed |
+  </Tab>
+  <Tab title="Policy Events">
+    | Event Type | Description |
+    |------------|-------------|
+    | `policy.created` | Policy created |
+    | `policy.updated` | Policy updated |
+    | `policy.version_created` | New version created |
+    | `policy.evaluated` | Policy evaluation |
+    | `policy.allowed` | Operation allowed |
+    | `policy.denied` | Operation denied |
+    | `policy.approval_required` | Approval required |
+    | `policy.migrated` | Policy migrated |
+  </Tab>
+  <Tab title="Escrow Events">
+    | Event Type | Description |
+    |------------|-------------|
+    | `escrow.created` | Escrow created |
+    | `escrow.accepted` | Escrow accepted |
+    | `escrow.released` | Funds released |
+    | `escrow.refunded` | Funds refunded |
+    | `escrow.disputed` | Dispute raised |
+    | `escrow.resolved` | Dispute resolved |
+  </Tab>
+  <Tab title="System Events">
+    | Event Type | Description |
+    |------------|-------------|
+    | `system.started` | Service started |
+    | `system.shutdown` | Service shutdown |
+    | `system.health_check` | Health check performed |
+    | `system.rpc_failover` | RPC endpoint failover |
+    | `system.chaos_enabled` | Chaos mode enabled |
+    | `system.chaos_disabled` | Chaos mode disabled |
+  </Tab>
+</Tabs>
+
+---
+
+## Increment Metric
+
+Increment a named metric counter.
+
+```bash cURL
+curl -X POST \
+  -H "x-api-key: dev-api-key" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "transactions.confirmed",
+    "value": 1
+  }' \
+  http://localhost:3000/api/v1/metrics/inc
+```
+
+### Request Body
+
+<ParamField body="name" type="string" required>
+  Metric name (dot-notation recommended)
+</ParamField>
+
+<ParamField body="value" type="number" default={1}>
+  Value to increment (default: 1)
+</ParamField>
+
+### Response
+
+```json
+{
+  "status": "success",
+  "data": {
+    "name": "transactions.confirmed",
+    "value": 42
+  }
+}
+```
+
+---
+
+## Get Metrics
+
+Retrieve all metric counters.
+
+```bash cURL
+curl -H "x-api-key: dev-api-key" \
+     http://localhost:3000/api/v1/metrics
+```
+
+### Response
+
+```json
+{
+  "status": "success",
+  "data": {
+    "metrics": {
+      "transactions.created": 150,
+      "transactions.confirmed": 142,
+      "transactions.failed": 8,
+      "wallets.created": 25,
+      "agents.created": 5,
+      "policies.evaluated": 200,
+      "policies.allowed": 195,
+      "policies.denied": 5
+    },
+    "timestamp": "2026-03-08T12:00:00.000Z"
+  }
+}
+```
+
+---
+
+## Observability Patterns
+
+### Transaction Tracing
+
+Trace a complete transaction lifecycle:
+
+```bash
+# Get all events for a transaction
+curl -H "x-api-key: dev-api-key" \
+     "http://localhost:3000/api/v1/audit/events?txId=123e4567-e89b-12d3-a456-426614174000"
+```
+
+Expected event sequence:
+```
+transaction.created
+transaction.stage_change (pending -> simulating)
+transaction.stage_change (simulating -> policy_eval)
+transaction.policy_evaluated
+transaction.stage_change (policy_eval -> signing)
+transaction.signed
+transaction.stage_change (signing -> submitting)
+transaction.submitted
+transaction.stage_change (submitting -> confirmed)
+transaction.confirmed
+```
+
+---
+
+### Agent Activity Monitoring
+
+Monitor agent behavior:
+
+```bash
+# Get all agent events
+curl -H "x-api-key: dev-api-key" \
+     "http://localhost:3000/api/v1/audit/events?agentId=agent-id&limit=100"
+```
+
+Key metrics:
+- Execution frequency
+- Success/failure ratio
+- Policy violations
+- Budget usage
+
+---
+
+### Policy Effectiveness
+
+Analyze policy decisions:
+
+```bash
+# Get policy evaluation events
+curl -H "x-api-key: dev-api-key" \
+     "http://localhost:3000/api/v1/audit/events?eventType=policy.evaluated&limit=100"
+```
+
+Analyze:
+- Allow/deny ratios
+- Most common denial reasons
+- Approval queue depth
+- Policy version effectiveness
+
+---
+
+### Error Analysis
+
+Identify failure patterns:
+
+```bash
+# Get failed transactions
+curl -H "x-api-key: dev-api-key" \
+     "http://localhost:3000/api/v1/audit/events?eventType=transaction.failed&limit=50"
+```
+
+Group by:
+- Error code
+- Failed stage
+- Protocol
+- Wallet/agent
+
+---
+
+## Metric Categories
+
+### Transaction Metrics
+
+```
+transactions.created
+transactions.confirmed
+transactions.failed
+transactions.retried
+transactions.approved
+transactions.rejected
+transactions.by_type.{type}
+transactions.by_protocol.{protocol}
+```
+
+### Policy Metrics
+
+```
+policies.evaluated
+policies.allowed
+policies.denied
+policies.approval_required
+policies.by_rule.{rule_type}
+```
+
+### Agent Metrics
+
+```
+agents.created
+agents.started
+agents.stopped
+agents.paused
+agents.executed
+agents.budget_exceeded
+```
+
+### Error Metrics
+
+```
+errors.validation
+errors.policy_violation
+errors.pipeline_error
+errors.confirmation_failed
+errors.by_stage.{stage}
+```
+
+---
+
+## Best Practices
+
+<Check>
+  **Use structured event types** with dot notation (e.g., `transaction.created`)
+</Check>
+
+<Check>
+  **Include correlation IDs** (txId, walletId, agentId) in all events
+</Check>
+
+<Check>
+  **Query with time bounds** for large event volumes
+</Check>
+
+<Check>
+  **Monitor metric trends** over time, not just absolute values
+</Check>
+
+<Check>
+  **Set up alerts** on critical metrics (error rates, budget exceeded)
+</Check>
+
+<Check>
+  **Use audit events for compliance** and post-incident analysis
+</Check>
+
+---
+
+## Example: Performance Dashboard
+
+```bash
+# Transaction success rate
+curl -H "x-api-key: dev-api-key" http://localhost:3000/api/v1/metrics
+
+# Recent failures
+curl -H "x-api-key: dev-api-key" \
+     "http://localhost:3000/api/v1/audit/events?eventType=transaction.failed&limit=10"
+
+# Policy denial rate
+curl -H "x-api-key: dev-api-key" \
+     "http://localhost:3000/api/v1/audit/events?eventType=policy.denied&since=2026-03-08T00:00:00.000Z"
+
+# Agent activity
+curl -H "x-api-key: dev-api-key" \
+     "http://localhost:3000/api/v1/audit/events?entityType=agent&limit=50"
+```
+
+---
+
+## Retention and Storage
+
+Audit events are stored in SQLite by default:
+
+```bash
+AUDIT_OBSERVABILITY_DB_PATH=/path/to/audit.db
+```
+
+<Warning>
+  For production deployments with high event volume, consider migrating to PostgreSQL or a dedicated logging service.
+</Warning>
+
+<Tip>
+  Regularly export audit events for long-term archival and compliance requirements.
+</Tip>

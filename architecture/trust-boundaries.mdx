@@ -1,0 +1,868 @@
+---
+title: 'Trust Boundaries'
+description: 'Security architecture, control boundaries, and threat model'
+---
+
+## Security Model Overview
+
+<Note>
+  **Core Security Principle**: Agent intent is **untrusted** until it survives validation, risk evaluation, policy checks, and signing-boundary controls.
+</Note>
+
+Agentic Wallet implements **defense-in-depth** through multiple isolated trust boundaries. No single component has full system authority.
+
+---
+
+## Trust Boundaries
+
+### 1. Agent Boundary
+
+<Card title="Principle: Agents Express Intents Only" icon="robot" iconType="solid">
+  Agents cannot construct raw transactions, access private keys, or bypass policy gates.
+</Card>
+
+**What Agents CAN Do**:
+- Submit high-level intents (e.g., `swap`, `transfer_sol`, `create_escrow`)
+- Query wallet balance, positions, and transaction history
+- Receive execution results and proofs
+
+**What Agents CANNOT Do**:
+- Read private keys or seed phrases
+- Sign transactions directly
+- Submit raw transaction bytes to RPC
+- Bypass policy or risk evaluation
+- Access other wallets without explicit authorization
+
+**Enforcement**:
+
+<Steps>
+  <Step title="API Gateway">
+    All agent requests enter through API gateway with authentication and rate limiting
+  </Step>
+  <Step title="Intent Validation">
+    Transaction-engine validates intent schema with Zod before processing
+  </Step>
+  <Step title="Capability Manifest">
+    Agent-runtime checks intent and protocol allowlists (and optional signed manifest)
+  </Step>
+  <Step title="Signing Isolation">
+    Only wallet-engine can sign; agents never receive key material
+  </Step>
+</Steps>
+
+**Threat Mitigation**:
+- ✓ Malicious agent cannot exfiltrate keys
+- ✓ Compromised agent limited to allowlisted intents
+- ✓ Agent cannot drain wallet beyond budget limits
+
+---
+
+### 2. Signing Boundary
+
+<Card title="Principle: Only Wallet-Engine Signs" icon="signature" iconType="solid">
+  The wallet-engine is the **sole trusted signer**. No other service or agent can sign transactions.
+</Card>
+
+**Boundary Implementation**:
+
+```text
+┌──────────────────────────────────────────────────┐
+│              Wallet Engine                       │
+│  ┌─────────────────────────────────────────┐   │
+│  │       Key Provider                      │   │
+│  │  ┌──────────────────────────────────┐  │   │
+│  │  │  Private Keys (Encrypted)        │  │   │
+│  │  │  - AES-256-GCM                   │  │   │
+│  │  │  - scrypt key derivation         │  │   │
+│  │  │  - Per-key salt + IV             │  │   │
+│  │  └──────────────────────────────────┘  │   │
+│  │                                         │   │
+│  │  Sign API: POST /sign                  │   │
+│  └─────────────────────────────────────────┘   │
+└──────────────────────────────────────────────────┘
+                      ↑
+                      │ HTTPS
+                      │
+┌─────────────────────┴────────────────────────────┐
+│         Transaction Engine                       │
+│  - Holds unsigned transaction                    │
+│  - Never sees private key                        │
+│  - Receives signed transaction back              │
+└──────────────────────────────────────────────────┘
+```
+
+**Access Control**:
+
+- **Signing API**: `POST /api/v1/wallets/:walletId/sign`
+- **Caller**: Only transaction-engine (internal service-to-service)
+- **Payload**: Unsigned transaction (base64)
+- **Response**: Signed transaction (base64) + signature
+
+**Key Provider Backends**:
+
+<CardGroup cols={2}>
+  <Card title="encrypted-file" icon="file-lock">
+    **Development**
+    - AES-256-GCM encryption
+    - Keys persisted to disk
+    - Single encryption secret
+  </Card>
+
+  <Card title="memory" icon="memory">
+    **Testing**
+    - Ephemeral in-memory storage
+    - Lost on restart
+    - No encryption needed
+  </Card>
+
+  <Card title="kms" icon="key">
+    **Production (Cloud)**
+    - Centralized key management
+    - HSM-backed storage
+    - Access logging & rotation
+    - Requires: `WALLET_KMS_MASTER_SECRET`
+  </Card>
+
+  <Card title="hsm" icon="microchip">
+    **Production (On-Prem)**
+    - Hardware security module
+    - FIPS 140-2 compliance
+    - Physical tamper resistance
+    - Requires: `WALLET_HSM_PIN`, `WALLET_HSM_MODULE_SECRET`
+  </Card>
+
+  <Card title="mpc" icon="network-wired">
+    **Production (Distributed)**
+    - Multi-party computation
+    - Threshold signatures (2-of-3)
+    - No single key holder
+    - Requires: 3 node secrets
+  </Card>
+</CardGroup>
+
+**Threat Mitigation**:
+- ✓ Key exfiltration requires compromising wallet-engine process
+- ✓ Signing requires valid wallet ID (no blind signing)
+- ✓ Backend abstraction allows security upgrades without code changes
+
+---
+
+### 3. Policy Boundary
+
+<Card title="Principle: All Spend-Capable Intents Must Pass Policy" icon="shield-check" iconType="solid">
+  No transaction is signed until policy-engine returns `allow` (or manual approval completes).
+</Card>
+
+**Fail-Secure Design**:
+
+```typescript
+try {
+  const decision = await fetch(`${policyEngineUrl}/api/v1/evaluate`, { ... });
+  if (decision.decision === 'deny') {
+    return failTransaction('Policy denied');
+  }
+} catch (error) {
+  // Policy-engine unreachable → DENY by default
+  return failTransaction('Policy evaluation failed');
+}
+```
+
+**Policy Evaluation Flow**:
+
+<Steps>
+  <Step title="Fetch Active Policies">
+    Policy-engine retrieves all active policies for wallet
+  </Step>
+  <Step title="Execute Rules">
+    Evaluate each rule in sequence:
+    - `spending_limit`: Check transaction amount vs limits
+    - `rate_limit`: Check transaction count in time window
+    - `address_allowlist`: Verify destination is permitted
+    - `program_allowlist`: Verify program IDs are permitted
+    - `token_allowlist`: Verify token mint is permitted
+    - `protocol_allowlist`: Verify protocol is permitted
+    - `max_slippage`: Verify slippage under threshold
+    - `protocol_risk`: Verify protocol-specific risk parameters
+    - `portfolio_risk`: Verify portfolio exposure limits
+  </Step>
+  <Step title="Aggregate Decision">
+    - If **any rule** returns `deny` → final decision is `deny`
+    - If **any rule** returns `require_approval` → final decision is `require_approval` (unless another rule denies)
+    - If **all rules** return `allow` → final decision is `allow`
+  </Step>
+  <Step title="Return Decision">
+    ```json
+    {
+      "decision": "allow" | "deny" | "require_approval",
+      "reasons": ["reason1", "reason2"],
+      "riskTier": "low" | "medium" | "high"
+    }
+    ```
+  </Step>
+</Steps>
+
+**Approval Gate**:
+
+When policy returns `require_approval`:
+
+1. Transaction pauses at `approval_gate` status
+2. Stored in pending approvals table with 24h expiry
+3. Operator must explicitly approve or reject:
+   - `POST /api/v1/transactions/:txId/approve` → proceeds to signing
+   - `POST /api/v1/transactions/:txId/reject` → marks as failed
+
+**Threat Mitigation**:
+- ✓ Prevents over-spending beyond configured limits
+- ✓ Prevents unauthorized destination addresses
+- ✓ Prevents interaction with malicious programs
+- ✓ Requires manual approval for high-risk transactions
+- ✓ Policy bypass requires compromising policy-engine (isolated service)
+
+---
+
+### 4. Protocol Boundary
+
+<Card title="Principle: Protocol Logic Isolated in Adapters" icon="plug" iconType="solid">
+  Protocol-specific transaction building is isolated in protocol-adapters service with registry pattern.
+</Card>
+
+**Adapter Registry Pattern**:
+
+```typescript
+interface ProtocolAdapter {
+  name: string;              // e.g., 'jupiter'
+  version: string;           // e.g., '1.0.0'
+  capabilities: string[];    // ['swap']
+  programIds: string[];      // Solana program IDs
+  
+  buildSwap?(params): Promise<BuildResult>;
+  buildStake?(params): Promise<BuildResult>;
+  getSwapQuote?(params): Promise<Quote>;
+  healthCheck?(): Promise<{ ok: boolean }>;
+}
+```
+
+**Isolation Benefits**:
+
+<Accordion title="1. Fail-Closed Quotes">
+  If external protocol API (e.g., Jupiter quote API) fails:
+  - Adapter returns error
+  - Transaction-engine marks transaction as failed
+  - **No synthetic success or stale quotes used**
+</Accordion>
+
+<Accordion title="2. Program ID Allowlists">
+  Each adapter declares its program IDs:
+  ```typescript
+  {
+    name: 'jupiter',
+    programIds: ['JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB']
+  }
+  ```
+  
+  Policy rules can enforce:
+  ```json
+  {
+    "type": "program_allowlist",
+    "programIds": ["JUP4Fb2cqiRUcaTHdrPC8h2gNsA2ETXiPDD33WcGuJB"]
+  }
+  ```
+</Accordion>
+
+<Accordion title="3. Version Migrations">
+  Adapters support version migrations:
+  ```typescript
+  registry.registerMigration('jupiter', {
+    fromVersion: '0.9.0',
+    toVersion: '1.0.0',
+    migrate: (type, intent) => ({
+      ...intent,
+      maxSlippageBps: intent.slippageBps // Field rename
+    })
+  });
+  ```
+  
+  Ensures backward compatibility when protocols change.
+</Accordion>
+
+<Accordion title="4. Health Checks">
+  Each adapter can implement health checks:
+  ```typescript
+  async healthCheck() {
+    const escrowProgramId = process.env.ESCROW_PROGRAM_ID;
+    if (!escrowProgramId) {
+      return { ok: false, details: { configured: false } };
+    }
+    
+    const accountInfo = await connection.getAccountInfo(new PublicKey(escrowProgramId));
+    return {
+      ok: accountInfo !== null,
+      details: { configured: true, deployed: accountInfo !== null }
+    };
+  }
+  ```
+  
+  Enables pre-flight validation of protocol availability.
+</Accordion>
+
+**Escrow Program (Real Anchor Program)**:
+
+The escrow adapter is backed by a **real on-chain Anchor program**, not memo placeholders:
+
+- Program location: `programs/escrow/`
+- Instructions: `create_escrow`, `accept_escrow`, `release_escrow`, `refund_escrow`, `dispute_escrow`, `resolve_dispute`, `create_milestone_escrow`, `release_milestone`, `x402_pay`
+- Deployed to devnet: `npm run escrow:deploy:devnet`
+- Program ID stored in `.env`: `ESCROW_PROGRAM_ID=<deployed_id>`
+
+**Threat Mitigation**:
+- ✓ Protocol vulnerabilities isolated to single adapter
+- ✓ Adapter upgrades don't affect other protocols
+- ✓ Program ID allowlists prevent malicious program interaction
+- ✓ Health checks detect deployment/configuration issues early
+
+---
+
+## Gateway Boundary
+
+<Card title="Principle: Single Entry Point with Layered Controls" icon="door-open" iconType="solid">
+  All external requests enter through API Gateway with authentication, authorization, and rate limiting.
+</Card>
+
+### Authentication
+
+**API Key Header**: `x-api-key`
+
+```bash
+API_GATEWAY_API_KEYS=key1:tenant1:wallets,transactions;key2:*:all
+```
+
+Format: `apiKey:tenant:scopes`
+
+**Enforcement**:
+
+```typescript
+const keyConfig = apiKeys.get(apiKey);
+if (!keyConfig) {
+  return 401 Unauthorized;
+}
+```
+
+### Authorization
+
+**Scope-Based Access Control**:
+
+| Route Pattern | Required Scope |
+|---------------|----------------|
+| `/api/v1/wallets/**` | `wallets` |
+| `/api/v1/transactions/**` | `transactions` |
+| `/api/v1/policies/**` | `policies` |
+| `/api/v1/agents/**` | `agents` |
+| `/api/v1/protocols/**` | `protocols` |
+| `/api/v1/risk/**` | `risk` |
+| `/api/v1/audit/**` | `audit` |
+| `/mcp/**` | `mcp` |
+
+**Enforcement**:
+
+```typescript
+const scope = resolveScope(path);
+if (!keyConfig.scopes.has('all') && !keyConfig.scopes.has(scope)) {
+  return 403 Forbidden;
+}
+```
+
+### Tenant Isolation (Optional)
+
+**Tenant Header**: `x-tenant-id`
+
+```typescript
+if (keyConfig.tenant !== '*' && tenant && keyConfig.tenant !== tenant) {
+  return 403 Forbidden; // Tenant mismatch
+}
+```
+
+Enables multi-tenant deployments where API keys are scoped to specific tenants.
+
+### Rate Limiting
+
+**Per-Key Rate Limit**:
+
+```bash
+API_GATEWAY_RATE_LIMIT_PER_MINUTE=120
+```
+
+**Sliding Window**:
+
+```typescript
+const state = rateLimits.get(apiKey) ?? { windowStart: now, count: 0 };
+if (now - state.windowStart > 60_000) {
+  state.windowStart = now;
+  state.count = 0;
+}
+
+state.count += 1;
+if (state.count > rateLimitPerMinute) {
+  return 429 Too Many Requests;
+}
+```
+
+### Response Normalization
+
+**Stable Machine Envelope**:
+
+All responses normalized to:
+
+```json
+{
+  "status": "success" | "failure",
+  "errorCode": "VALIDATION_ERROR" | "POLICY_VIOLATION" | "PIPELINE_ERROR" | "CONFIRMATION_FAILED" | null,
+  "failedAt": "validation" | "policy" | "build" | "sign" | "send" | "confirm" | "completed" | "gateway" | null,
+  "stage": "validation" | "policy" | "build" | "sign" | "send" | "confirm" | "completed" | "gateway",
+  "traceId": "uuid",
+  "data": { /* original payload */ },
+  "error": "error message (if failure)",
+  "errorMessage": "error message (if failure)"
+}
+```
+
+**Benefits**:
+- Consistent error handling across all endpoints
+- Deterministic error codes for programmatic handling
+- Trace IDs for debugging and audit correlation
+- Stage tracking for execution visibility
+
+**Threat Mitigation**:
+- ✓ Prevents unauthorized API access
+- ✓ Limits API abuse via rate limiting
+- ✓ Provides tenant isolation for multi-tenant deployments
+- ✓ Normalizes error responses to prevent information leakage
+
+---
+
+## Input Validation Boundary
+
+<Card title="Principle: Strict Schema Validation at Every Service Edge" icon="filter" iconType="solid">
+  All public APIs validate inputs with Zod schemas before processing.
+</Card>
+
+**Schema Validation Example**:
+
+```typescript
+import { createTransactionRequestSchema } from '@agentic-wallet/common';
+
+app.post('/api/v1/transactions', async (c) => {
+  const body = await c.req.json();
+  const parsed = createTransactionRequestSchema.safeParse(body);
+  
+  if (!parsed.success) {
+    return c.json({ error: parsed.error.flatten() }, 400);
+  }
+  
+  // parsed.data is now fully typed and validated
+});
+```
+
+**Validated Entities**:
+
+- Transaction requests (type, protocol, intent fields)
+- Policy rules (discriminated unions by rule type)
+- Agent configurations (capabilities, execution modes)
+- Risk configurations (protocol risk, portfolio risk)
+- Capability manifests (signature verification)
+
+**Threat Mitigation**:
+- ✓ Prevents injection attacks (SQL, NoSQL, command injection)
+- ✓ Prevents type confusion attacks
+- ✓ Rejects malformed payloads at service edge
+- ✓ Ensures downstream code operates on clean, typed data
+
+---
+
+## Capability Manifest Boundary
+
+<Card title="Principle: Signed Manifests Enforce Runtime Permissions" icon="certificate" iconType="solid">
+  Agents can be issued **signed capability manifests** that restrict intents and protocols at runtime.
+</Card>
+
+**Manifest Structure**:
+
+```typescript
+{
+  manifestId: string,
+  agentId: string,
+  issuedAt: string,
+  expiresAt: string,
+  allowedIntents: string[],       // ['swap', 'transfer_sol']
+  allowedProtocols: string[],     // ['jupiter', 'system-program']
+  issuer: string,                 // 'agent-runtime'
+  signature: string               // HMAC-SHA256
+}
+```
+
+**Issuance**:
+
+```bash
+POST /api/v1/agents/:agentId/manifest/issue
+{
+  "allowedIntents": ["swap", "transfer_sol"],
+  "allowedProtocols": ["jupiter", "system-program"],
+  "ttl": 3600
+}
+```
+
+**Verification**:
+
+```typescript
+const verify = verifyCapabilityManifest(manifest, manifestSigningSecret);
+if (!verify.ok) {
+  return 403 Forbidden; // Invalid signature or expired
+}
+
+if (!manifestAllows(manifest, request.type, request.protocol)) {
+  return 403 Forbidden; // Intent/protocol not in manifest
+}
+```
+
+**Signature**:
+
+```typescript
+const payload = JSON.stringify({
+  manifestId,
+  agentId,
+  issuedAt,
+  expiresAt,
+  allowedIntents,
+  allowedProtocols,
+  issuer
+});
+
+const signature = crypto
+  .createHmac('sha256', manifestSigningSecret)
+  .update(payload)
+  .digest('hex');
+```
+
+**Runtime Enforcement**:
+
+```bash
+AGENT_REQUIRE_MANIFEST=true
+```
+
+When enabled, all agent executions require a valid manifest.
+
+**Threat Mitigation**:
+- ✓ Prevents agent privilege escalation
+- ✓ Time-bound permissions (manifest expiry)
+- ✓ Cryptographic proof of authorization
+- ✓ Runtime revocation by rotating `AGENT_MANIFEST_SIGNING_SECRET`
+
+---
+
+## Delta Guard Boundary
+
+<Card title="Principle: Post-Execution Balance Verification" icon="scale-balanced" iconType="solid">
+  After transaction confirmation, verify actual balance change matches expected delta.
+</Card>
+
+**Purpose**: Detect silent execution failures, sandwich attacks, or unexpected fees.
+
+**Calculation**:
+
+```typescript
+// Expected delta based on transaction type
+const expectedDelta = {
+  transfer_sol: -(lamports + estimatedFee),
+  swap: -(inputLamports + estimatedFee), // Simplified
+  stake: -(lamports + estimatedFee),
+  create_escrow: -(lamports + estimatedFee)
+};
+
+// Actual delta
+const actualDelta = postBalance - preBalance;
+
+// Variance check
+const varianceBps = Math.abs((actualDelta - expectedDelta) / Math.abs(expectedDelta)) * 10000;
+const absoluteDiff = Math.abs(actualDelta - expectedDelta);
+
+if (varianceBps > config.deltaVarianceBpsThreshold && 
+    absoluteDiff > absoluteTolerance) {
+  // Delta guard breach
+}
+```
+
+**Configuration**:
+
+```bash
+DELTA_GUARD_ABSOLUTE_TOLERANCE_LAMPORTS=10000
+
+# Per-protocol config
+{
+  "protocol": "jupiter",
+  "deltaVarianceBpsThreshold": 500  // 5% variance allowed
+}
+```
+
+**Auto-Pause on Breach**:
+
+```bash
+# Per-wallet portfolio risk config
+{
+  "walletId": "wallet-123",
+  "autoPauseOnBreach": true
+}
+```
+
+If delta guard fails and `autoPauseOnBreach` is enabled:
+- Agent is automatically paused
+- Webhook notification sent (if configured)
+- Audit event emitted
+
+**Threat Mitigation**:
+- ✓ Detects MEV sandwich attacks
+- ✓ Detects unexpected fee drains
+- ✓ Detects silent transaction failures with partial execution
+- ✓ Provides post-execution safety net
+
+---
+
+## Audit & Observability Boundary
+
+<Card title="Principle: Immutable Audit Log with Execution Proofs" icon="book" iconType="solid">
+  Every transaction generates an immutable audit trail and cryptographic execution proof.
+</Card>
+
+### Execution Proof
+
+**Generated on Confirmation**:
+
+```typescript
+const proof = {
+  intentHash: sha256(JSON.stringify(intent)),
+  policyHash: sha256(JSON.stringify(policyDecision)),
+  simulationHash: sha256(JSON.stringify(simulationResult)),
+  proofHash: sha256(intentHash + policyHash + simulationHash + signature),
+  signature: txSignature,
+  txId,
+  walletId,
+  agentId,
+  timestamp
+};
+```
+
+**Properties**:
+- **Deterministic**: Same inputs always produce same hashes
+- **Tamper-Evident**: Any modification changes `proofHash`
+- **Replayable**: Proof can be regenerated from stored inputs
+
+**Retrieval**:
+
+```bash
+GET /api/v1/transactions/:txId/proof
+```
+
+### Audit Event Stream
+
+**Event Types**:
+- `tx_status`: Transaction status changes
+- `protocol_risk_decision`: Protocol risk evaluation result
+- `policy_decision`: Policy evaluation result
+- `execution_proof`: Execution proof generated
+- `execution_proof_failed`: Failure proof generated
+- `agent_paused`: Agent auto-paused
+- `delta_guard_breach`: Delta guard violation
+
+**Event Schema**:
+
+```typescript
+{
+  id: string,
+  entityType: 'transaction' | 'agent' | 'wallet' | 'policy',
+  entityId: string,
+  eventType: string,
+  timestamp: string,
+  payload: Record<string, unknown>,
+  txId?: string,
+  walletId?: string,
+  agentId?: string,
+  protocol?: string
+}
+```
+
+**Query**:
+
+```bash
+GET /api/v1/audit/events?entityType=transaction&entityId=tx-123
+```
+
+**Threat Mitigation**:
+- ✓ Provides forensic evidence for security incidents
+- ✓ Enables compliance audits
+- ✓ Detects unauthorized access patterns
+- ✓ Supports dispute resolution with cryptographic proofs
+
+---
+
+## Threat Model Summary
+
+### Assets to Protect
+
+1. **Wallet Private Keys** → Protected by signing boundary
+2. **Signing Capability** → Protected by wallet-engine isolation
+3. **Policy Integrity** → Protected by policy-engine isolation
+4. **Transaction Finality** → Protected by RPC failover and outbox durability
+5. **Audit Artifacts** → Protected by immutable audit log and execution proofs
+6. **API Credentials** → Protected by gateway authentication and scoping
+
+### Attack Scenarios & Mitigations
+
+<Accordion title="Malicious Agent Exfiltration">
+  **Attack**: Compromised agent attempts to read private keys
+
+  **Mitigation**:
+  - ✓ Agent boundary: No key access via API
+  - ✓ Signing boundary: Keys never leave wallet-engine
+  - ✓ Network isolation: Agent cannot connect to wallet-engine directly
+</Accordion>
+
+<Accordion title="Policy Bypass">
+  **Attack**: Agent attempts to bypass policy evaluation
+
+  **Mitigation**:
+  - ✓ Policy boundary: All transactions flow through policy gate
+  - ✓ Fail-secure: Policy-engine unreachable → deny
+  - ✓ Approval gate: High-risk transactions require manual approval
+</Accordion>
+
+<Accordion title="Unauthorized Spending">
+  **Attack**: Agent attempts to spend beyond budget or policy limits
+
+  **Mitigation**:
+  - ✓ Budget enforcement: Agent-runtime checks budget before execution
+  - ✓ Policy rules: Spending limits enforced at policy gate
+  - ✓ Portfolio risk: Portfolio-level exposure limits
+  - ✓ Auto-pause: Agent paused on budget breach
+</Accordion>
+
+<Accordion title="Malicious Protocol Interaction">
+  **Attack**: Agent attempts to interact with malicious Solana program
+
+  **Mitigation**:
+  - ✓ Protocol boundary: Adapters declare program IDs
+  - ✓ Program allowlists: Policy rules enforce allowed programs
+  - ✓ Health checks: Detect misconfigured or unavailable protocols
+</Accordion>
+
+<Accordion title="Sandwich Attack (MEV)">
+  **Attack**: Front-runner extracts value from agent's swap
+
+  **Mitigation**:
+  - ✓ Slippage controls: Protocol risk limits max slippage
+  - ✓ Delta guard: Post-execution balance verification
+  - ✓ Auto-pause: Agent paused on unexpected balance change
+</Accordion>
+
+<Accordion title="Replay Attack">
+  **Attack**: Attacker replays captured transaction
+
+  **Mitigation**:
+  - ✓ Idempotency keys: Deduplicate identical requests
+  - ✓ Blockhash expiry: Solana transactions expire after ~60s
+  - ✓ Durable outbox: Lease mechanism prevents double execution
+</Accordion>
+
+<Accordion title="API Abuse">
+  **Attack**: Attacker floods API with requests
+
+  **Mitigation**:
+  - ✓ Rate limiting: 120 req/min per API key
+  - ✓ Authentication: Invalid API keys rejected
+  - ✓ Scope enforcement: API keys restricted to specific operations
+</Accordion>
+
+---
+
+## Production Hardening Checklist
+
+<Steps>
+  <Step title="Key Management">
+    - [ ] Use `kms`, `hsm`, or `mpc` backend (not `encrypted-file`)
+    - [ ] Rotate `WALLET_KEY_ENCRYPTION_SECRET` regularly
+    - [ ] Enable access logging for signing operations
+    - [ ] Implement key rotation policy
+  </Step>
+  <Step title="Authentication">
+    - [ ] Set `API_GATEWAY_ENFORCE_AUTH=true`
+    - [ ] Generate strong, unique API keys per client
+    - [ ] Use tenant isolation (`x-tenant-id`)
+    - [ ] Rotate API keys on compromise
+  </Step>
+  <Step title="Network Security">
+    - [ ] Deploy services in private network (no public IPs)
+    - [ ] Use TLS for all service-to-service communication
+    - [ ] Enable firewall rules (allow only necessary ports)
+    - [ ] Use VPN or bastion host for operator access
+  </Step>
+  <Step title="Policy Enforcement">
+    - [ ] Enable `AGENT_REQUIRE_MANIFEST=true`
+    - [ ] Enable `AGENT_REQUIRE_BACKTEST_PASS=true`
+    - [ ] Configure spending limits for all wallets
+    - [ ] Configure rate limits for all wallets
+    - [ ] Use address/program allowlists
+  </Step>
+  <Step title="Monitoring">
+    - [ ] Set up audit log monitoring
+    - [ ] Alert on delta guard breaches
+    - [ ] Alert on agent auto-pause events
+    - [ ] Monitor RPC health and failover
+    - [ ] Track transaction confirmation latency
+  </Step>
+  <Step title="Disaster Recovery">
+    - [ ] Backup wallet-engine database regularly
+    - [ ] Test key recovery from backups
+    - [ ] Document incident response procedures
+    - [ ] Maintain offline key recovery mechanism
+  </Step>
+</Steps>
+
+---
+
+## Security Posture Summary
+
+<CardGroup cols={3}>
+  <Card title="Preventive Controls" icon="shield">
+    - API authentication
+    - Policy gates
+    - Signing boundary
+    - Input validation
+    - Rate limiting
+  </Card>
+
+  <Card title="Detective Controls" icon="magnifying-glass">
+    - Audit event stream
+    - Delta guard checks
+    - RPC health monitoring
+    - Execution proofs
+  </Card>
+
+  <Card title="Corrective Controls" icon="wrench">
+    - Agent auto-pause
+    - Transaction retry
+    - RPC failover
+    - Manual approval gate
+    - Durable outbox recovery
+  </Card>
+</CardGroup>
+
+---
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Architecture Overview" icon="diagram-project" href="/architecture/overview">
+    Return to high-level architecture overview
+  </Card>
+
+  <Card title="API Reference" icon="code" href="/api/overview">
+    Explore API endpoints with security context
+  </Card>
+</CardGroup>

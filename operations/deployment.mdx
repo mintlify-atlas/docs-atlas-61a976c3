@@ -1,0 +1,312 @@
+---
+title: 'Deployment'
+description: 'Deploy and run Agentic Wallet services in local and devnet environments'
+---
+
+## Prerequisites
+
+Before deploying Agentic Wallet, ensure you have the following installed:
+
+- **Node.js** >= 20
+- **npm** >= 10
+- **Solana CLI** >= 1.18 (required for devnet funding and escrow deployment)
+- **Anchor CLI** >= 0.31 (required for escrow program build and deployment)
+
+## Local Development Setup
+
+<Steps>
+  <Step title="Clone and Install">
+    Install all dependencies for the monorepo:
+    
+    ```bash
+    npm install
+    ```
+  </Step>
+
+  <Step title="Configure Environment">
+    Copy the example environment file and configure required variables:
+    
+    ```bash
+    cp .env.example .env
+    ```
+    
+    Edit `.env` and set at minimum:
+    
+    <CodeGroup>
+    ```bash Required Variables
+    # Encryption secret for wallet key storage
+    WALLET_KEY_ENCRYPTION_SECRET=replace-with-long-random-secret
+    
+    # API gateway authentication
+    API_GATEWAY_API_KEYS=dev-api-key:*:all
+    ```
+    
+    ```bash RPC Configuration
+    # Primary RPC endpoint
+    SOLANA_RPC_URL=https://api.devnet.solana.com
+    
+    # RPC pool for failover (comma-separated)
+    SOLANA_RPC_POOL_URLS=https://api.devnet.solana.com
+    
+    # Health probe interval (ms)
+    SOLANA_RPC_HEALTH_PROBE_MS=15000
+    ```
+    
+    ```bash Service Ports
+    API_GATEWAY_PORT=3000
+    WALLET_ENGINE_PORT=3002
+    POLICY_ENGINE_PORT=3003
+    AGENT_RUNTIME_PORT=3004
+    PROTOCOL_ADAPTERS_PORT=3005
+    TRANSACTION_ENGINE_PORT=3006
+    AUDIT_OBSERVABILITY_PORT=3007
+    MCP_SERVER_PORT=3008
+    ```
+    </CodeGroup>
+    
+    <Note>
+      For production deployments, generate strong random secrets using:
+      ```bash
+      openssl rand -base64 32
+      ```
+    </Note>
+  </Step>
+
+  <Step title="Load Environment Variables">
+    Export environment variables to your shell:
+    
+    ```bash
+    set -a; source .env; set +a
+    ```
+  </Step>
+
+  <Step title="Start All Services">
+    Launch the full stack using the development script:
+    
+    ```bash
+    npm run dev
+    ```
+    
+    This starts all services concurrently:
+    - `api-gateway` (port 3000)
+    - `wallet-engine` (port 3002)
+    - `policy-engine` (port 3003)
+    - `agent-runtime` (port 3004)
+    - `protocol-adapters` (port 3005)
+    - `transaction-engine` (port 3006)
+    - `audit-observability` (port 3007)
+    - `mcp-server` (port 3008)
+  </Step>
+</Steps>
+
+## Health Check Endpoints
+
+Verify that all services are running correctly:
+
+<CodeGroup>
+```bash API Gateway
+curl -s http://localhost:3000/health
+# Expected: {"status":"ok","service":"api-gateway"}
+```
+
+```bash Transaction Engine
+curl -s http://localhost:3006/health
+# Expected: {"status":"ok","service":"transaction-engine"}
+```
+
+```bash Protocol Adapters
+curl -s http://localhost:3005/health
+# Expected: {"status":"ok","service":"protocol-adapters"}
+```
+
+```bash Wallet Engine
+curl -s http://localhost:3002/health
+# Expected: {"status":"ok","service":"wallet-engine"}
+```
+</CodeGroup>
+
+<Note>
+  The CLI includes a built-in `doctor` command that checks all service health endpoints:
+  ```bash
+  npm run cli -- doctor
+  ```
+</Note>
+
+## Escrow Program Deployment
+
+The Agentic Wallet includes a real Anchor escrow program that must be deployed to devnet.
+
+<Steps>
+  <Step title="Set Deployment Key">
+    Configure your deployment wallet in `.env`:
+    
+    ```bash
+    # Base58 secret key or JSON byte array
+    PRIVATE_KEY=your-base58-secret-key
+    ```
+    
+    <Warning>
+      Ensure this wallet has sufficient SOL for program deployment (~5-10 SOL on devnet).
+    </Warning>
+  </Step>
+
+  <Step title="Build Escrow Program">
+    Compile the Anchor program:
+    
+    ```bash
+    npm run escrow:build
+    ```
+    
+    This syncs the `declare_id!` macro and builds the program artifacts.
+  </Step>
+
+  <Step title="Deploy to Devnet">
+    Deploy the compiled program:
+    
+    ```bash
+    npm run escrow:deploy:devnet
+    ```
+    
+    This command:
+    1. Syncs `declare_id!` and `Anchor.toml` from the deploy keypair
+    2. Builds and deploys via Anchor CLI
+    3. Automatically updates `.env` with `ESCROW_PROGRAM_ID=<deployed_id>`
+  </Step>
+
+  <Step title="Verify Escrow Adapter">
+    Check that the escrow adapter is properly configured:
+    
+    ```bash
+    curl -s -H 'x-api-key: dev-api-key' \
+      http://localhost:3000/api/v1/protocols/escrow/health
+    ```
+    
+    Expected response:
+    ```json
+    {
+      "ok": true,
+      "configured": true,
+      "deployed": true
+    }
+    ```
+  </Step>
+</Steps>
+
+## Validation and Quality Gates
+
+Run the full validation suite before deploying:
+
+<CodeGroup>
+```bash Secret Scanning
+npm run secret:scan
+```
+
+```bash Linting
+npm run lint
+```
+
+```bash Type Checking
+npm run typecheck
+```
+
+```bash Unit Tests
+npm run test
+```
+
+```bash Build
+npm run build
+```
+
+```bash Full CI Check
+npm run ci:check
+```
+</CodeGroup>
+
+## Devnet Smoke Tests
+
+Validate the deployment with end-to-end smoke tests:
+
+<CodeGroup>
+```bash Basic Smoke Test
+# Tests wallet creation, SOL transfers, and basic intents
+npm run devnet:smoke
+```
+
+```bash Multi-Agent Test
+# Tests concurrent agent execution
+npm run devnet:multi-agent
+```
+
+```bash Protocol Matrix
+# Tests all protocol adapters
+npm run devnet:protocol-matrix
+```
+
+```bash Judge Demo
+# Full end-to-end demo with proof artifacts
+npm run demo:judge
+```
+</CodeGroup>
+
+## Environment Configuration Reference
+
+### RPC and Execution Tuning
+
+```bash
+# Primary RPC endpoint
+SOLANA_RPC_URL=https://api.devnet.solana.com
+
+# Pool of RPC endpoints for failover (comma-separated)
+SOLANA_RPC_POOL_URLS=https://api.devnet.solana.com,https://rpc.ankr.com/solana_devnet
+
+# Health probe interval in milliseconds
+SOLANA_RPC_HEALTH_PROBE_MS=15000
+
+# Priority fee bounds (microlamports)
+SOLANA_PRIORITY_FEE_MIN_MICROLAMPORTS=2000
+SOLANA_PRIORITY_FEE_MAX_MICROLAMPORTS=200000
+
+# Fee percentile for adaptive tuning
+SOLANA_PRIORITY_FEE_PERCENTILE=75
+
+# Fee multiplier in basis points (1150 = 1.15x)
+SOLANA_PRIORITY_FEE_MULTIPLIER_BPS=1150
+
+# Delta guard tolerance for balance verification
+DELTA_GUARD_ABSOLUTE_TOLERANCE_LAMPORTS=10000
+```
+
+### Storage and Durability
+
+```bash
+# Data directories for each service
+WALLET_ENGINE_DATA_DIR=services/wallet-engine/data
+POLICY_ENGINE_DATA_DIR=services/policy-engine/data
+AGENT_RUNTIME_DATA_DIR=services/agent-runtime/data
+TRANSACTION_ENGINE_DATA_DIR=services/transaction-engine/data
+AUDIT_OBSERVABILITY_DATA_DIR=services/audit-observability/data
+
+# Optional explicit SQLite database paths
+TRANSACTION_ENGINE_DB_PATH=
+AGENT_RUNTIME_DB_PATH=
+POLICY_ENGINE_DB_PATH=
+AUDIT_OBSERVABILITY_DB_PATH=
+WALLET_ENGINE_DB_PATH=
+```
+
+### Outbox Queue Configuration
+
+```bash
+# Lease duration for outbox jobs (ms)
+TX_OUTBOX_LEASE_MS=30000
+
+# Polling interval for outbox worker (ms)
+TX_OUTBOX_POLL_MS=2000
+
+# Maximum retry attempts for failed jobs
+TX_OUTBOX_MAX_ATTEMPTS=6
+```
+
+<Note>
+  See `.env.example` in the repository root for the complete list of configuration options.
+</Note>

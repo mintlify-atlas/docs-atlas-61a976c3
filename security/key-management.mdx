@@ -1,0 +1,417 @@
+---
+title: Key Management
+description: Private key storage, isolation, and production security practices
+---
+
+## Private Key Architecture
+
+Agentic Wallet implements strict key isolation to ensure that private keys never leave the wallet-engine boundary. This architecture protects against key exfiltration by agents, protocol adapters, or external services.
+
+## Key Isolation Principles
+
+<CardGroup cols={2}>
+  <Card title="Exclusive Signing Authority" icon="key">
+    Only wallet-engine can access private keys
+  </Card>
+  <Card title="No Key Transmission" icon="ban">
+    Keys never sent over network or to agents
+  </Card>
+  <Card title="Provider Abstraction" icon="cube">
+    Pluggable backends for different custody models
+  </Card>
+  <Card title="Encrypted at Rest" icon="lock">
+    All key material encrypted when stored
+  </Card>
+</CardGroup>
+
+## Key Provider Interface
+
+All signer backends implement a common `KeyProvider` interface:
+
+```typescript
+// From services/wallet-engine/src/key-provider/key-provider.ts
+
+export interface KeyProvider {
+  save(walletId: string, keypair: Keypair): Promise<void>;
+  load(walletId: string): Promise<Keypair>;
+  provenance(): KeyProvenance;
+}
+```
+
+This abstraction allows seamless switching between storage backends without code changes:
+
+- `save()`: Persist a new wallet keypair securely
+- `load()`: Retrieve keypair for signing operations
+- `provenance()`: Report backend type and custody model for audit trails
+
+## Wallet-Engine Exclusive Signing
+
+The transaction-engine requests signatures via the wallet-engine API, never directly accessing keys:
+
+<Steps>
+  <Step title="Sign Request">
+    Transaction-engine sends unsigned transaction to wallet-engine:
+    ```http
+    POST http://localhost:3002/wallets/:walletId/sign
+    Content-Type: application/json
+
+    {
+      "transaction": "base64-encoded-unsigned-tx"
+    }
+    ```
+  </Step>
+  <Step title="Key Retrieval">
+    Wallet-engine loads keypair from the configured key provider:
+    ```typescript
+    const keypair = await keyProvider.load(walletId);
+    ```
+  </Step>
+  <Step title="Signing">
+    Wallet-engine signs the transaction using Solana's built-in signing:
+    ```typescript
+    transaction.sign([keypair]);
+    ```
+  </Step>
+  <Step title="Return Signature">
+    Signed transaction returned to transaction-engine (keys never leave wallet-engine)
+  </Step>
+</Steps>
+
+<Warning>
+  The wallet-engine service must be isolated from public network access. Only transaction-engine should be able to reach it.
+</Warning>
+
+## Key Lifecycle
+
+### Wallet Creation
+
+New wallets are generated with cryptographically secure random keys:
+
+```typescript
+// From services/wallet-engine/src/app.ts
+
+const keypair = Keypair.generate(); // Solana's secure key generation
+const publicKey = keypair.publicKey.toBase58();
+const walletId = randomUUID();
+
+await keyProvider.save(walletId, keypair);
+```
+
+- Keypairs generated using Solana's `Keypair.generate()` (ed25519)
+- Each wallet assigned a unique UUID identifier
+- Public key derived from keypair and stored in metadata
+- Private key immediately encrypted and stored via key provider
+
+### Key Storage
+
+Key material is **never stored in plaintext**. All backends encrypt keys at rest:
+
+| Backend | Encryption Method |
+|---------|-------------------|
+| `encrypted-file` | AES-256-GCM with `WALLET_KEY_ENCRYPTION_SECRET` |
+| `memory` | Keys held in process memory only (ephemeral) |
+| `kms` | Envelope encryption: data key wrapped by KMS master secret |
+| `hsm` | Keys wrapped with HSM module secret + slot PIN |
+| `mpc` | Secret split into 3 shares, each encrypted separately |
+
+### Key Loading
+
+Keys are loaded into memory only when needed for signing:
+
+```typescript
+// From services/wallet-engine/src/key-provider/encrypted-file-key-provider.ts
+
+async load(walletId: string): Promise<Keypair> {
+  const keyFile = path.join(this.keysDir, `${walletId}.json`);
+  const encrypted = await fs.readFile(keyFile, 'utf8');
+  const secretBytes = JSON.parse(decryptText(encrypted, this.encryptionSecret));
+  return Keypair.fromSecretKey(Uint8Array.from(secretBytes));
+}
+```
+
+- Keys decrypted on-demand per signing request
+- Keypair object exists in memory only during signing operation
+- No persistent in-memory key cache (reduces memory dump risk)
+
+### Key Rotation
+
+Key rotation is **currently manual** but supported:
+
+<Steps>
+  <Step title="Generate New Wallet">
+    Create a new wallet with `POST /api/v1/wallets`
+  </Step>
+  <Step title="Transfer Assets">
+    Move SOL and SPL tokens from old wallet to new wallet
+  </Step>
+  <Step title="Update Agent Configuration">
+    Point agents to the new `walletId`
+  </Step>
+  <Step title="Archive Old Wallet">
+    Optionally delete old wallet key file or mark inactive
+  </Step>
+</Steps>
+
+<Note>
+  Automated key rotation is a planned feature. For production environments using KMS/HSM backends, implement rotation policies at the KMS/HSM layer.
+</Note>
+
+## Key Storage Locations
+
+Key files are stored in the wallet-engine data directory:
+
+```bash
+WALLET_ENGINE_DATA_DIR=/path/to/wallet-engine/data
+```
+
+Default: `services/wallet-engine/data/keys/`
+
+### File Naming Conventions
+
+| Backend | File Pattern | Example |
+|---------|--------------|----------|
+| `encrypted-file` | `{walletId}.json` | `f47ac10b-58cc-4372-a567-0e02b2c3d479.json` |
+| `kms` | `{walletId}.kms.json` | `f47ac10b-58cc-4372-a567-0e02b2c3d479.kms.json` |
+| `hsm` | `{walletId}.hsm.json` | `f47ac10b-58cc-4372-a567-0e02b2c3d479.hsm.json` |
+| `mpc` | `{walletId}.mpc.json` | `f47ac10b-58cc-4372-a567-0e02b2c3d479.mpc.json` |
+| `memory` | (none, ephemeral) | - |
+
+## Encryption Details
+
+### Encrypted-File Backend
+
+Uses AES-256-GCM authenticated encryption:
+
+```typescript
+// From services/wallet-engine/src/crypto/encryption.ts
+
+export const encryptText = (plaintext: string, secret: string): string => {
+  const iv = randomBytes(16);
+  const key = createHash('sha256').update(secret).digest();
+  const cipher = createCipheriv('aes-256-gcm', key, iv);
+  
+  let encrypted = cipher.update(plaintext, 'utf8', 'base64');
+  encrypted += cipher.final('base64');
+  const authTag = cipher.getAuthTag();
+  
+  return JSON.stringify({
+    iv: iv.toString('base64'),
+    encrypted,
+    authTag: authTag.toString('base64'),
+  });
+};
+```
+
+- **Key derivation**: SHA-256 hash of `WALLET_KEY_ENCRYPTION_SECRET`
+- **Initialization vector (IV)**: 16 random bytes per encryption
+- **Authentication tag**: GCM tag for integrity verification
+- **Format**: JSON envelope with IV, ciphertext, and auth tag
+
+<Warning>
+  The `WALLET_KEY_ENCRYPTION_SECRET` must be cryptographically random and kept secure. If this secret is compromised, all encrypted-file keys are at risk.
+</Warning>
+
+### KMS Backend
+
+Uses envelope encryption with a data key wrapped by the master secret:
+
+```typescript
+// From services/wallet-engine/src/key-provider/kms-key-provider.ts
+
+const dataKey = randomBytes(32).toString('base64');
+const wrappedDataKey = encryptText(dataKey, this.secretForWrap());
+const encryptedSecret = encryptText(
+  Buffer.from(keypair.secretKey).toString('base64'), 
+  dataKey
+);
+```
+
+Envelope structure:
+```json
+{
+  "v": 1,
+  "keyId": "wallet-engine-kms-key",
+  "wrappedDataKey": "...",
+  "encryptedSecret": "...",
+  "createdAt": "2026-03-08T10:00:00.000Z"
+}
+```
+
+- **Data key**: Random 32-byte key generated per wallet
+- **Master secret**: Configured via `WALLET_KMS_MASTER_SECRET`
+- **Key ID**: Optional identifier for key rotation scenarios
+
+### HSM Backend
+
+Wraps keys using HSM slot, PIN, and module secret:
+
+```typescript
+// From services/wallet-engine/src/key-provider/hsm-key-provider.ts
+
+private unwrapSecret(): string {
+  return `${this.moduleSecret}:${this.slotId}:${this.pin}`;
+}
+
+const wrappedSecret = encryptText(
+  Buffer.from(keypair.secretKey).toString('base64'), 
+  this.unwrapSecret()
+);
+```
+
+Envelope structure:
+```json
+{
+  "v": 1,
+  "slotId": "slot-0",
+  "wrappedSecret": "...",
+  "createdAt": "2026-03-08T10:00:00.000Z"
+}
+```
+
+- **Slot ID**: HSM slot identifier (default: `slot-0`)
+- **PIN**: HSM access PIN from `WALLET_HSM_PIN`
+- **Module secret**: Shared secret from `WALLET_HSM_MODULE_SECRET`
+
+<Note>
+  The current HSM implementation is a software simulation. For production, integrate with real HSM hardware (e.g., AWS CloudHSM, Thales Luna, YubiHSM).
+</Note>
+
+### MPC Backend
+
+Splits keys into 3 shares using Shamir-like secret sharing over GF(256):
+
+```typescript
+// From services/wallet-engine/src/key-provider/mpc-key-provider.ts
+
+const shares = splitSecret(Uint8Array.from(keypair.secretKey));
+// shares: [{id: 1, bytes}, {id: 2, bytes}, {id: 3, bytes}]
+
+const wrappedShares: StoredShare[] = shares.map((share) => {
+  const nodeSecret = this.nodeSecrets[share.id - 1];
+  return {
+    id: share.id,
+    wrapped: encryptText(Buffer.from(share.bytes).toString('base64'), nodeSecret),
+  };
+});
+```
+
+Envelope structure:
+```json
+{
+  "v": 1,
+  "threshold": 2,
+  "shares": [
+    {"id": 1, "wrapped": "..."},
+    {"id": 2, "wrapped": "..."},
+    {"id": 3, "wrapped": "..."}
+  ],
+  "createdAt": "2026-03-08T10:00:00.000Z"
+}
+```
+
+- **3-of-3 split**: Secret divided into 3 shares
+- **2-of-3 reconstruction**: Any 2 shares can reconstruct the key
+- **Node secrets**: Each share encrypted with a different `WALLET_MPC_NODE{1,2,3}_SECRET`
+- **GF(256) arithmetic**: Galois field operations for share generation/reconstruction
+
+<Warning>
+  For production MPC deployments, the 3 node secrets should be stored in separate infrastructure zones to ensure fault tolerance and security.
+</Warning>
+
+## Production Security Recommendations
+
+<Steps>
+  <Step title="Choose Appropriate Backend">
+    Use `kms`, `hsm`, or `mpc` for production (see [Signer Backends](/security/signer-backends))
+  </Step>
+  <Step title="Strong Secrets">
+    Generate secrets with `openssl rand -base64 32` or equivalent
+  </Step>
+  <Step title="Secret Management">
+    Store secrets in external secret managers (AWS Secrets Manager, Vault, etc.)
+  </Step>
+  <Step title="Network Isolation">
+    Run wallet-engine in an isolated network segment, not exposed to public internet
+  </Step>
+  <Step title="File System Permissions">
+    Set restrictive permissions on key storage directory:
+    ```bash
+    chmod 700 $WALLET_ENGINE_DATA_DIR/keys
+    chmod 600 $WALLET_ENGINE_DATA_DIR/keys/*
+    ```
+  </Step>
+  <Step title="Backup Strategy">
+    Implement secure encrypted backups of key files
+  </Step>
+  <Step title="Audit Logging">
+    Enable audit logging for all key load/sign operations
+  </Step>
+  <Step title="Key Rotation Policy">
+    Establish periodic key rotation schedule (e.g., quarterly)
+  </Step>
+</Steps>
+
+## Key Provenance Tracking
+
+Each key provider reports its provenance for audit purposes:
+
+```typescript
+export interface KeyProvenance {
+  backend: 'encrypted-file' | 'memory' | 'kms' | 'hsm' | 'mpc';
+  custody: 'local' | 'external';
+  deterministicAddressing: boolean;
+}
+```
+
+Example responses:
+
+```json
+// Encrypted-file backend
+{
+  "backend": "encrypted-file",
+  "custody": "local",
+  "deterministicAddressing": false
+}
+
+// KMS backend
+{
+  "backend": "kms",
+  "custody": "external",
+  "deterministicAddressing": false
+}
+```
+
+- **backend**: Identifies the key storage mechanism
+- **custody**: `local` means keys stored on disk, `external` means KMS/HSM/MPC
+- **deterministicAddressing**: Reserved for future HD wallet support
+
+## Auto-Funding (Devnet Only)
+
+For devnet development, wallets can be auto-funded on creation:
+
+```bash
+WALLET_AUTOFUND_PAYER_PRIVATE_KEY=<base58-or-json-array>
+WALLET_AUTOFUND_DEFAULT_LAMPORTS=2000000
+```
+
+```bash
+npm run wallets -- create --label demo --auto-fund
+```
+
+<Warning>
+  Auto-funding is for devnet testing only. Never use auto-funding in production or with mainnet keys.
+</Warning>
+
+## Related Pages
+
+<CardGroup cols={2}>
+  <Card title="Security Overview" icon="shield" href="/security/overview">
+    Trust boundaries and protection layers
+  </Card>
+  <Card title="Signer Backends" icon="server" href="/security/signer-backends">
+    Detailed guide for each backend option
+  </Card>
+  <Card title="Policy Enforcement" icon="shield-check" href="/security/policy-enforcement">
+    Policy evaluation before signing
+  </Card>
+</CardGroup>

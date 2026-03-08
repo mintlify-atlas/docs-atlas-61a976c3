@@ -1,0 +1,579 @@
+---
+title: 'Strategy Backtesting'
+description: 'Test agent strategies and paper trade before live deployment'
+icon: 'chart-line'
+---
+
+Agentic Wallet provides backtesting and paper trading capabilities to validate agent strategies before committing real funds. This enables safe strategy development and confidence in autonomous agent behavior.
+
+## Overview
+
+Strategy testing provides:
+
+- **Backtesting**: Simulate historical strategy performance
+- **Paper Trading**: Execute intents without on-chain submission
+- **Pass/Fail Metrics**: Automated strategy validation
+- **PnL Tracking**: Profit and loss calculation per step
+- **Autonomous Decision Validation**: Test rule-based agent logic
+
+<Note>
+Backtesting is required for agents when `AGENT_REQUIRE_BACKTEST_PASS=true` is set in production.
+</Note>
+
+## Backtesting Workflow
+
+Backtests evaluate a sequence of strategy steps and calculate success rates.
+
+### Define Strategy Steps
+
+<Steps>
+  <Step title="Create step sequence">
+    Each step represents an intent with a timestamp and optional PnL:
+    
+    ```json
+    {
+      "walletId": "<wallet-id>",
+      "name": "daily-swap-strategy",
+      "steps": [
+        {
+          "type": "swap",
+          "protocol": "jupiter",
+          "intent": {
+            "inputMint": "So11111111111111111111111111111111111111112",
+            "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "amount": 1000000,
+            "slippageBps": 50
+          },
+          "timestamp": "2026-03-01T09:00:00.000Z",
+          "simulatedPnlLamports": 50000
+        },
+        {
+          "type": "swap",
+          "protocol": "jupiter",
+          "intent": {
+            "inputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+            "outputMint": "So11111111111111111111111111111111111111112",
+            "amount": 1000000,
+            "slippageBps": 50
+          },
+          "timestamp": "2026-03-01T15:00:00.000Z",
+          "simulatedPnlLamports": -20000
+        }
+      ],
+      "minimumPassRate": 0.7
+    }
+    ```
+  </Step>
+
+  <Step title="Run backtest">
+    ```bash
+    curl -X POST http://localhost:3000/api/v1/strategy/backtest \
+      -H 'x-api-key: dev-api-key' \
+      -H 'content-type: application/json' \
+      -d @strategy.json
+    ```
+  </Step>
+
+  <Step title="Evaluate results">
+    Response:
+    ```json
+    {
+      "data": {
+        "runId": "<uuid>",
+        "walletId": "<wallet-id>",
+        "name": "daily-swap-strategy",
+        "totalSteps": 2,
+        "passedSteps": 1,
+        "failedSteps": 1,
+        "passRate": 0.5,
+        "totalPnlLamports": 30000,
+        "passed": false,
+        "createdAt": "2026-03-08T12:00:00.000Z"
+      }
+    }
+    ```
+    
+    <Warning>
+    This strategy has `passRate: 0.5` but `minimumPassRate: 0.7`, so `passed: false`.
+    </Warning>
+  </Step>
+</Steps>
+
+### Using the CLI
+
+```bash
+npm run cli -- strategy backtest \
+  --wallet-id <wallet-id> \
+  --name "smoke-test-strategy" \
+  --steps '[
+    {
+      "type":"transfer_sol",
+      "protocol":"system-program",
+      "intent":{"destination":"<pubkey>","lamports":1000},
+      "timestamp":"2026-01-01T00:00:00.000Z",
+      "simulatedPnlLamports":0
+    }
+  ]'
+```
+
+### Using the SDK
+
+```typescript
+import { AgenticWalletSDK } from '@agentic-wallet/sdk';
+
+const client = new AgenticWalletSDK(
+  'http://localhost:3000',
+  { 'x-api-key': 'dev-api-key' }
+);
+
+const result = await client.strategy.backtest({
+  walletId: '<wallet-id>',
+  name: 'swing-trade-strategy',
+  steps: [
+    {
+      type: 'swap',
+      protocol: 'jupiter',
+      intent: {
+        inputMint: 'So11111111111111111111111111111111111111112',
+        outputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+        amount: 1_000_000,
+        slippageBps: 50,
+      },
+      timestamp: '2026-03-01T09:00:00.000Z',
+      simulatedPnlLamports: 75_000,
+    },
+    {
+      type: 'swap',
+      protocol: 'jupiter',
+      intent: {
+        inputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+        outputMint: 'So11111111111111111111111111111111111111112',
+        amount: 1_000_000,
+        slippageBps: 50,
+      },
+      timestamp: '2026-03-01T18:00:00.000Z',
+      simulatedPnlLamports: 120_000,
+    },
+  ],
+  minimumPassRate: 0.8,
+});
+
+console.log(`Backtest ${result.passed ? 'PASSED' : 'FAILED'}`);
+console.log(`Pass rate: ${(result.passRate * 100).toFixed(1)}%`);
+console.log(`Total PnL: ${result.totalPnlLamports} lamports`);
+```
+
+## PnL Calculation
+
+Steps with `simulatedPnlLamports >= 0` are counted as passed:
+
+```typescript
+let passedSteps = 0;
+let totalPnlLamports = 0;
+
+for (const step of steps) {
+  const pnl = step.simulatedPnlLamports ?? 0;
+  totalPnlLamports += pnl;
+  
+  if (pnl >= 0) {
+    passedSteps += 1;
+  }
+}
+
+const passRate = passedSteps / steps.length;
+const passed = passRate >= minimumPassRate;
+```
+
+<Accordion title="Example Scenarios">
+**Scenario 1: All Profitable**
+```json
+{
+  "totalSteps": 5,
+  "passedSteps": 5,
+  "passRate": 1.0,
+  "totalPnlLamports": 500000,
+  "passed": true
+}
+```
+
+**Scenario 2: Mixed Results**
+```json
+{
+  "totalSteps": 10,
+  "passedSteps": 7,
+  "passRate": 0.7,
+  "totalPnlLamports": 150000,
+  "passed": true
+}
+```
+
+**Scenario 3: Below Threshold**
+```json
+{
+  "totalSteps": 10,
+  "passedSteps": 6,
+  "passRate": 0.6,
+  "totalPnlLamports": -50000,
+  "passed": false
+}
+```
+</Accordion>
+
+## Paper Trading Mode
+
+Paper trading executes real intent logic without on-chain submission.
+
+### Execute Paper Trade
+
+<CodeGroup>
+```bash CLI
+npm run cli -- strategy paper-execute \
+  --agent-id <agent-id> \
+  --wallet-id <wallet-id> \
+  --type swap \
+  --protocol jupiter \
+  --intent '{"inputMint":"So11111111111111111111111111111111111111112","outputMint":"EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v","amount":1000000,"slippageBps":50}'
+```
+
+```typescript SDK
+const paperTrade = await client.strategy.paperExecute({
+  agentId: '<agent-id>',
+  walletId: '<wallet-id>',
+  type: 'swap',
+  protocol: 'jupiter',
+  intent: {
+    inputMint: 'So11111111111111111111111111111111111111112',
+    outputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+    amount: 1_000_000,
+    slippageBps: 50,
+  },
+});
+
+console.log('Paper trade recorded:', paperTrade.id);
+```
+
+```bash cURL
+curl -X POST http://localhost:3000/api/v1/strategy/paper/execute \
+  -H 'x-api-key: dev-api-key' \
+  -H 'content-type: application/json' \
+  -d '{
+    "agentId": "<agent-id>",
+    "walletId": "<wallet-id>",
+    "type": "swap",
+    "protocol": "jupiter",
+    "intent": {
+      "inputMint": "So11111111111111111111111111111111111111112",
+      "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "amount": 1000000,
+      "slippageBps": 50
+    }
+  }'
+```
+</CodeGroup>
+
+### List Paper Trades
+
+```bash
+npm run cli -- strategy paper-list <agent-id>
+```
+
+Response:
+```json
+{
+  "data": [
+    {
+      "id": "<uuid>",
+      "agentId": "<agent-id>",
+      "walletId": "<wallet-id>",
+      "type": "swap",
+      "protocol": "jupiter",
+      "intent": { ... },
+      "createdAt": "2026-03-08T12:30:00.000Z"
+    }
+  ]
+}
+```
+
+<Note>
+Paper trades are stored in-memory with a 500-record cap per agent.
+</Note>
+
+## Autonomous Decision Engine
+
+Agents can use backtesting to validate autonomous strategies before enabling them.
+
+### Strategy Steps
+
+Define repeatable actions with cooldowns and caps:
+
+```typescript
+const agent = await client.agents.create({
+  name: 'backtest-validated-agent',
+  executionMode: 'autonomous',
+  autonomy: {
+    enabled: true,
+    mode: 'execute',
+    cadenceSeconds: 60,
+    maxActionsPerHour: 10,
+    steps: [
+      {
+        id: 'daily-swap',
+        type: 'swap',
+        protocol: 'jupiter',
+        intent: {
+          inputMint: 'So11111111111111111111111111111111111111112',
+          outputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+          amount: 1_000_000,
+          slippageBps: 50,
+        },
+        maxRuns: 5,
+        cooldownSeconds: 3600,  // 1 hour cooldown
+      },
+    ],
+  },
+});
+```
+
+### Strategy Conditions
+
+Use rules to trigger actions based on metrics:
+
+```typescript
+autonomy: {
+  enabled: true,
+  mode: 'execute',
+  rules: [
+    {
+      id: 'low-balance-rebalance',
+      when: [
+        { metric: 'balance_lamports', op: 'lt', value: 1_000_000 }
+      ],
+      then: {
+        type: 'transfer_sol',
+        protocol: 'system-program',
+        intent: {
+          destination: '{{knownWallet0}}',
+          lamports: 500_000,
+        },
+      },
+      maxRuns: 3,
+      cooldownSeconds: 300,
+    },
+    {
+      id: 'high-balance-stake',
+      when: [
+        { metric: 'balance_lamports', op: 'gt', value: 10_000_000 }
+      ],
+      then: {
+        type: 'stake',
+        protocol: 'marinade',
+        intent: {
+          lamports: 5_000_000,
+        },
+      },
+      maxRuns: 1,
+      cooldownSeconds: 86400,  // 24 hours
+    },
+  ],
+}
+```
+
+<Accordion title="Available Metrics">
+- `tick`: Autonomous loop iteration count
+- `balance_lamports`: Current wallet SOL balance
+- `known_wallets_count`: Number of registered wallets
+</Accordion>
+
+<Accordion title="Comparison Operators">
+- `gt`: Greater than
+- `gte`: Greater than or equal
+- `lt`: Less than
+- `lte`: Less than or equal
+- `eq`: Equal
+</Accordion>
+
+### Template Variables
+
+Use dynamic values in intents:
+
+```json
+{
+  "destination": "{{knownWallet0}}",
+  "lamports": "{{balanceLamports}}",
+  "memo": "Transfer at tick {{tick}}"
+}
+```
+
+Supported variables:
+- `{{tick}}`
+- `{{walletId}}`
+- `{{balanceLamports}}`
+- `{{knownWallet0}}`, `{{knownWallet1}}`
+
+## Enforcing Backtest Requirements
+
+### Production Governance
+
+Require passing backtests before agent activation:
+
+```bash
+AGENT_REQUIRE_BACKTEST_PASS=true
+```
+
+When enabled:
+1. Agents must have a passing backtest in their wallet history
+2. Autonomous agents cannot start without a passing backtest
+3. Failed backtests block agent execution
+
+### Checking Latest Backtest
+
+```typescript
+const agent = await client.agents.get('<agent-id>');
+const backtest = await client.strategy.getLatestBacktest(agent.walletId);
+
+if (!backtest || !backtest.passed) {
+  console.error('Agent cannot start: no passing backtest');
+  return;
+}
+
+await client.agents.start(agent.id);
+```
+
+## Paper Trading for Agents
+
+Set autonomous agents to paper trading mode:
+
+```typescript
+const agent = await client.agents.create({
+  name: 'paper-trading-agent',
+  executionMode: 'autonomous',
+  autonomy: {
+    enabled: true,
+    mode: 'paper',  // All intents will be paper-only
+    steps: [
+      {
+        id: 'test-swap',
+        type: 'swap',
+        protocol: 'jupiter',
+        intent: { ... },
+      },
+    ],
+  },
+});
+```
+
+<Warning>
+In `paper` mode, all autonomous actions are logged but **not executed on-chain**.
+</Warning>
+
+### Per-Step Paper Mode
+
+```typescript
+steps: [
+  {
+    id: 'real-transfer',
+    type: 'transfer_sol',
+    protocol: 'system-program',
+    paperOnly: false,  // Execute on-chain
+    intent: { ... },
+  },
+  {
+    id: 'test-swap',
+    type: 'swap',
+    protocol: 'jupiter',
+    paperOnly: true,  // Paper trade only
+    intent: { ... },
+  },
+]
+```
+
+## CLI Strategy Wizard
+
+Interactive strategy builder:
+
+```bash
+npm run cli -- interactive
+```
+
+Select **Strategy Wizard** and follow prompts:
+1. Choose wallet
+2. Define strategy name
+3. Add steps (type, protocol, intent, PnL)
+4. Set minimum pass rate
+5. Run backtest
+6. Review results
+
+## Advanced Patterns
+
+### Monte Carlo Backtesting
+
+Run multiple backtest iterations with randomized PnL:
+
+```typescript
+const runMonteCarloBacktest = async (
+  walletId: string,
+  strategy: any,
+  iterations: number
+) => {
+  const results = [];
+  
+  for (let i = 0; i < iterations; i++) {
+    const randomizedSteps = strategy.steps.map(step => ({
+      ...step,
+      simulatedPnlLamports: Math.floor(
+        Math.random() * 200_000 - 100_000  // Random between -100k and +100k
+      ),
+    }));
+    
+    const result = await client.strategy.backtest({
+      walletId,
+      name: `monte-carlo-${i}`,
+      steps: randomizedSteps,
+      minimumPassRate: 0.6,
+    });
+    
+    results.push(result);
+  }
+  
+  const passRate = results.filter(r => r.passed).length / results.length;
+  console.log(`Monte Carlo pass rate: ${(passRate * 100).toFixed(1)}%`);
+  
+  return results;
+};
+```
+
+### Walk-Forward Analysis
+
+Backtest on rolling time windows:
+
+```typescript
+const windows = [
+  { start: '2026-01-01', end: '2026-01-31' },
+  { start: '2026-02-01', end: '2026-02-28' },
+  { start: '2026-03-01', end: '2026-03-31' },
+];
+
+for (const window of windows) {
+  const steps = generateStepsForWindow(window);
+  const result = await client.strategy.backtest({
+    walletId: '<wallet-id>',
+    name: `walk-forward-${window.start}`,
+    steps,
+    minimumPassRate: 0.7,
+  });
+  
+  console.log(`${window.start}: ${result.passed ? 'PASS' : 'FAIL'}`);
+}
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Multi-Agent Orchestration" icon="users" href="/guides/multi-agent-orchestration">
+    Apply validated strategies to agent fleets
+  </Card>
+  
+  <Card title="Escrow Program" icon="lock" href="/guides/escrow-program">
+    Backtest escrow-based payment strategies
+  </Card>
+</CardGroup>

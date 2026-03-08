@@ -1,0 +1,455 @@
+---
+title: 'Gasless Transactions'
+description: 'Execute intents without SOL for transaction fees using Kora RPC'
+icon: 'bolt'
+---
+
+Agentic Wallet supports gasless transaction execution via Kora RPC, enabling agents to perform operations without holding SOL for transaction fees. This is ideal for onboarding new users and enabling frictionless agent interactions.
+
+## Overview
+
+Gasless execution allows:
+
+- **Zero SOL requirement**: Agents can operate with only token balances
+- **Protocol-gated eligibility**: Only approved protocols support gasless
+- **Automatic fee sponsorship**: Kora RPC covers transaction fees
+- **Transparent fallback**: Same intent API, just add `gasless: true`
+
+<Note>
+Gasless transactions are routed through Kora RPC (`KORA_RPC_URL`) instead of standard Solana RPC endpoints.
+</Note>
+
+## Configuration
+
+### Environment Setup
+
+Add Kora RPC endpoint to `.env`:
+
+```bash
+KORA_RPC_URL=https://kora-rpc.example.com
+```
+
+For local testing:
+```bash
+KORA_RPC_URL=http://localhost:8080
+```
+
+### Restart Services
+
+```bash
+set -a; source .env; set +a
+npm run dev
+```
+
+The transaction engine will use Kora RPC for all gasless-flagged intents.
+
+## Protocol Eligibility
+
+### Check Protocol Support
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/risk/protocols/<protocol-name>
+```
+
+Response includes:
+```json
+{
+  "data": {
+    "protocol": "system-program",
+    "decision": "allow",
+    "config": {
+      "gaslessEligible": true,
+      "maxNotionalLamports": 100000000,
+      "slippageBps": 100
+    }
+  }
+}
+```
+
+### Default Eligible Protocols
+
+By default, most protocols are gasless-eligible:
+
+- `system-program` (SOL transfers)
+- `spl-token` (token transfers)
+- `jupiter` (swaps)
+- `marinade` (staking)
+- `escrow` (escrow operations)
+
+### Restricting Gasless Access
+
+Disable gasless for a specific protocol:
+
+```bash
+curl -X PUT http://localhost:3000/api/v1/risk/protocols/<protocol> \
+  -H 'x-api-key: dev-api-key' \
+  -H 'content-type: application/json' \
+  -d '{
+    "gaslessEligible": false
+  }'
+```
+
+<Warning>
+If a protocol is marked `gaslessEligible: false`, gasless intents will be rejected at the policy stage.
+</Warning>
+
+## Enabling Gasless for Intents
+
+### Via Intent Runner
+
+Add `"gasless": true` to any intent:
+
+```bash
+npm run intent-runner -- --intent '{
+  "type": "transfer_sol",
+  "walletId": "<wallet-id>",
+  "protocol": "system-program",
+  "gasless": true,
+  "intent": {
+    "destination": "<recipient-pubkey>",
+    "lamports": 1000000
+  }
+}'
+```
+
+### Via CLI
+
+```bash
+npm run cli -- agent execute <agent-id> \
+  --type transfer_sol \
+  --protocol system-program \
+  --intent '{"destination":"<pubkey>","lamports":1000000}' \
+  --gasless
+```
+
+### Via SDK
+
+```typescript
+import { AgenticWalletSDK } from '@agentic-wallet/sdk';
+
+const client = new AgenticWalletSDK(
+  'http://localhost:3000',
+  { 'x-api-key': 'dev-api-key' }
+);
+
+const result = await client.transactions.create({
+  walletId: '<wallet-id>',
+  type: 'transfer_sol',
+  protocol: 'system-program',
+  gasless: true,
+  intent: {
+    destination: '<recipient-pubkey>',
+    lamports: 1_000_000,
+  },
+});
+
+console.log('Gasless transaction:', result.signature);
+```
+
+### Via API Gateway
+
+```bash
+curl -X POST http://localhost:3000/api/v1/transactions \
+  -H 'x-api-key: dev-api-key' \
+  -H 'content-type: application/json' \
+  -d '{
+    "walletId": "<wallet-id>",
+    "type": "transfer_sol",
+    "protocol": "system-program",
+    "gasless": true,
+    "intent": {
+      "destination": "<recipient-pubkey>",
+      "lamports": 1000000
+    }
+  }'
+```
+
+## How It Works
+
+Gasless execution follows the same pipeline with RPC routing changes:
+
+<Steps>
+  <Step title="Intent submission">
+    User/agent submits intent with `gasless: true` flag.
+  </Step>
+
+  <Step title="Eligibility check">
+    Transaction engine queries protocol risk config:
+    ```typescript
+    if (request.gasless && !protocolRisk.config.gaslessEligible) {
+      throw new Error('Protocol not eligible for gasless execution');
+    }
+    ```
+  </Step>
+
+  <Step title="Transaction build">
+    Protocol adapter builds the transaction (unchanged from normal flow).
+  </Step>
+
+  <Step title="Policy evaluation">
+    Policy engine evaluates the intent (unchanged).
+  </Step>
+
+  <Step title="Signing">
+    Wallet engine signs the transaction (unchanged).
+  </Step>
+
+  <Step title="Gasless submission">
+    Transaction engine routes to Kora RPC:
+    ```typescript
+    const response = await fetch(koraRpcUrl, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        jsonrpc: '2.0',
+        id: 1,
+        method: 'signAndSendTransaction',
+        params: { transaction: signedTxBase64 },
+      }),
+    });
+    ```
+  </Step>
+
+  <Step title="Confirmation">
+    Transaction engine confirms via standard Solana RPC.
+  </Step>
+</Steps>
+
+## Gasless Agent Configuration
+
+Create agents that always use gasless execution:
+
+```typescript
+const gaslessAgent = await client.agents.create({
+  name: 'gasless-trader',
+  allowedIntents: ['swap', 'transfer_sol'],
+  allowedProtocols: ['jupiter', 'system-program'],
+  executionMode: 'autonomous',
+  autonomy: {
+    enabled: true,
+    mode: 'execute',
+    steps: [
+      {
+        id: 'gasless-swap',
+        type: 'swap',
+        protocol: 'jupiter',
+        gasless: true,  // Force gasless for this step
+        intent: {
+          inputMint: 'So11111111111111111111111111111111111111112',
+          outputMint: 'EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v',
+          amount: 1000000,
+          slippageBps: 100,
+        },
+        maxRuns: 10,
+        cooldownSeconds: 60,
+      },
+    ],
+  },
+});
+```
+
+## Limitations
+
+### Fee Sponsorship Caps
+
+Kora RPC may impose limits:
+- Maximum transactions per wallet per hour
+- Maximum fee amount per transaction
+- Protocol-specific restrictions
+
+<Warning>
+If Kora RPC rejects a transaction, the engine will return:
+```json
+{
+  "status": "failure",
+  "errorCode": "CONFIRMATION_FAILED",
+  "failedAt": "send",
+  "message": "Kora signAndSendTransaction failed: rate limit exceeded"
+}
+```
+</Warning>
+
+### Fallback Strategy
+
+If gasless fails, retry without gasless flag:
+
+```typescript
+try {
+  return await client.transactions.create({ ...intent, gasless: true });
+} catch (error) {
+  console.warn('Gasless failed, retrying with normal execution:', error);
+  return await client.transactions.create({ ...intent, gasless: false });
+}
+```
+
+### Not Available for All Operations
+
+Gasless mode is **not supported** for:
+- Program deployments
+- Account creations requiring rent deposits
+- Operations requiring token account initialization
+
+These require the wallet to hold SOL.
+
+## Monitoring Gasless Transactions
+
+### Transaction Metadata
+
+Gasless transactions are marked in history:
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/transactions/<tx-id>
+```
+
+Response includes:
+```json
+{
+  "data": {
+    "id": "<tx-id>",
+    "gasless": true,
+    "status": "confirmed",
+    "signature": "<signature>",
+    "stage": "completed"
+  }
+}
+```
+
+### Audit Events
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  'http://localhost:3000/api/v1/audit/events?category=gasless'
+```
+
+### Metrics
+
+Query gasless execution statistics:
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/metrics
+```
+
+Look for:
+- `gasless_transaction_success_total`
+- `gasless_transaction_failure_total`
+- `gasless_protocol_usage_total`
+
+## Testing Gasless Locally
+
+### Mock Kora RPC
+
+For testing without a real Kora instance, use a mock server:
+
+```typescript
+import express from 'express';
+
+const app = express();
+app.use(express.json());
+
+app.post('/', (req, res) => {
+  const { method, params } = req.body;
+  
+  if (method === 'signAndSendTransaction') {
+    // Simulate success
+    res.json({
+      jsonrpc: '2.0',
+      id: req.body.id,
+      result: {
+        signature: '5j7s3...' + Date.now(),  // Mock signature
+      },
+    });
+  } else {
+    res.status(400).json({
+      jsonrpc: '2.0',
+      id: req.body.id,
+      error: { message: 'Method not supported' },
+    });
+  }
+});
+
+app.listen(8080, () => {
+  console.log('Mock Kora RPC listening on http://localhost:8080');
+});
+```
+
+Run:
+```bash
+KORA_RPC_URL=http://localhost:8080 npm run dev
+```
+
+## Security Considerations
+
+<Warning>
+**Gasless Security Checklist:**
+- Validate Kora RPC endpoint is HTTPS in production
+- Set protocol eligibility conservatively
+- Monitor for abuse patterns (rapid gasless submissions)
+- Implement wallet-level gasless rate limits
+- Log all gasless transactions for auditing
+</Warning>
+
+### Rate Limiting
+
+Add per-wallet gasless caps:
+
+```typescript
+const gaslessLimits = new Map<string, number[]>();
+
+function checkGaslessRateLimit(walletId: string): boolean {
+  const now = Date.now();
+  const recentTxs = gaslessLimits.get(walletId) ?? [];
+  const filtered = recentTxs.filter(ts => now - ts < 60_000); // Last minute
+  
+  if (filtered.length >= 10) {
+    throw new Error('Gasless rate limit exceeded (max 10/min)');
+  }
+  
+  filtered.push(now);
+  gaslessLimits.set(walletId, filtered);
+  return true;
+}
+```
+
+## Production Deployment
+
+### Environment Variables
+
+```bash
+# Production Kora RPC endpoint
+KORA_RPC_URL=https://kora-rpc.mainnet.example.com
+
+# Fallback to standard RPC if Kora unavailable
+SOLANA_RPC_URL=https://api.mainnet-beta.solana.com
+
+# Restrict gasless to specific protocols
+GASLESS_ALLOWED_PROTOCOLS=system-program,jupiter,escrow
+```
+
+### Health Checks
+
+Monitor Kora RPC availability:
+
+```bash
+curl -X POST ${KORA_RPC_URL} \
+  -H 'content-type: application/json' \
+  -d '{
+    "jsonrpc": "2.0",
+    "id": 1,
+    "method": "getHealth"
+  }'
+```
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="Multi-Agent Orchestration" icon="users" href="/guides/multi-agent-orchestration">
+    Use gasless for agent-to-agent transfers
+  </Card>
+  
+  <Card title="Strategy Backtesting" icon="chart-line" href="/guides/strategy-backtesting">
+    Test gasless strategies before deployment
+  </Card>
+</CardGroup>

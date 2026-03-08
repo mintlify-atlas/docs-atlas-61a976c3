@@ -1,0 +1,661 @@
+---
+title: Signer Backends
+description: Storage options for private keys including encrypted-file, memory, KMS, HSM, and MPC
+---
+
+## Signer Backend Options
+
+Agentic Wallet supports five signer backends for different security and operational requirements. All backends implement the same `KeyProvider` interface, allowing seamless switching without code changes.
+
+```bash
+WALLET_SIGNER_BACKEND=encrypted-file|memory|kms|hsm|mpc
+```
+
+<CardGroup cols={2}>
+  <Card title="Encrypted-File" icon="file-lock" href="#encrypted-file-backend">
+    Local development and prototyping
+  </Card>
+  <Card title="Memory" icon="memory" href="#memory-backend">
+    Ephemeral testing (keys not persisted)
+  </Card>
+  <Card title="KMS" icon="cloud-lock" href="#kms-backend">
+    Managed key governance and rotation
+  </Card>
+  <Card title="HSM" icon="microchip" href="#hsm-backend">
+    Hardware-rooted custody for compliance
+  </Card>
+  <Card title="MPC" icon="network-wired" href="#mpc-backend">
+    Distributed threshold custody
+  </Card>
+</CardGroup>
+
+## Decision Matrix
+
+| Backend | Use Case | Persistence | Recovery | Production Ready |
+|---------|----------|-------------|----------|------------------|
+| `encrypted-file` | Local development, demos | Encrypted files on disk | Manual backup | No |
+| `memory` | Integration tests, CI | In-memory only | None (ephemeral) | No |
+| `kms` | Managed cloud environments | External KMS | KMS backup/recovery | Yes |
+| `hsm` | High-compliance deployments | Hardware security module | HSM failover | Yes |
+| `mpc` | Distributed custody | Threshold secret shares | 2-of-3 reconstruction | Yes |
+
+## Encrypted-File Backend
+
+### Overview
+
+Keys stored as encrypted files on local disk using AES-256-GCM.
+
+**Best for:**
+- Local development and prototyping
+- Single-machine deployments
+- Quick setup and iteration
+
+**Not suitable for:**
+- Production environments
+- Multi-node deployments
+- High-security requirements
+
+### Configuration
+
+```bash
+WALLET_SIGNER_BACKEND=encrypted-file
+WALLET_KEY_ENCRYPTION_SECRET=your-secret-here  # Required
+WALLET_ENGINE_DATA_DIR=/path/to/data           # Optional
+```
+
+<Warning>
+  The `WALLET_KEY_ENCRYPTION_SECRET` must be kept secure. If compromised, all encrypted keys are at risk.
+</Warning>
+
+### How It Works
+
+```typescript
+// From services/wallet-engine/src/key-provider/encrypted-file-key-provider.ts
+
+export class EncryptedFileKeyProvider implements KeyProvider {
+  async save(walletId: string, keypair: Keypair): Promise<void> {
+    const keyFile = path.join(this.keysDir, `${walletId}.json`);
+    const secretBytes = JSON.stringify(Array.from(keypair.secretKey));
+    const encrypted = encryptText(secretBytes, this.encryptionSecret);
+    await fs.writeFile(keyFile, encrypted, 'utf8');
+  }
+
+  async load(walletId: string): Promise<Keypair> {
+    const keyFile = path.join(this.keysDir, `${walletId}.json`);
+    const encrypted = await fs.readFile(keyFile, 'utf8');
+    const secretBytes = JSON.parse(decryptText(encrypted, this.encryptionSecret));
+    return Keypair.fromSecretKey(Uint8Array.from(secretBytes));
+  }
+}
+```
+
+### File Format
+
+Keys stored in JSON format:
+
+```json
+{
+  "iv": "base64-encoded-iv",
+  "encrypted": "base64-encoded-ciphertext",
+  "authTag": "base64-encoded-auth-tag"
+}
+```
+
+- **Algorithm**: AES-256-GCM (authenticated encryption)
+- **Key derivation**: SHA-256 hash of `WALLET_KEY_ENCRYPTION_SECRET`
+- **IV**: Random 16 bytes per encryption
+- **Authentication**: GCM provides integrity verification
+
+### File Locations
+
+```bash
+$WALLET_ENGINE_DATA_DIR/keys/{walletId}.json
+```
+
+Example:
+```
+services/wallet-engine/data/keys/
+├── f47ac10b-58cc-4372-a567-0e02b2c3d479.json
+├── 9d2c8f6e-4b1a-4c3d-8e5f-6a7b8c9d0e1f.json
+└── ...
+```
+
+### Security Considerations
+
+<Steps>
+  <Step title="Strong Secret">
+    Generate secret with `openssl rand -base64 32`
+  </Step>
+  <Step title="File Permissions">
+    Set restrictive permissions:
+    ```bash
+    chmod 700 $WALLET_ENGINE_DATA_DIR/keys
+    chmod 600 $WALLET_ENGINE_DATA_DIR/keys/*
+    ```
+  </Step>
+  <Step title="Backup Strategy">
+    Implement encrypted backups of key directory
+  </Step>
+  <Step title="Secret Management">
+    Store `WALLET_KEY_ENCRYPTION_SECRET` in environment, not in code
+  </Step>
+</Steps>
+
+## Memory Backend
+
+### Overview
+
+Keys held in process memory only, never persisted to disk.
+
+**Best for:**
+- Integration tests
+- CI/CD pipelines
+- Ephemeral testing environments
+
+**Not suitable for:**
+- Any production use
+- Development with persistent wallets
+- Scenarios requiring key recovery
+
+### Configuration
+
+```bash
+WALLET_SIGNER_BACKEND=memory
+# No additional configuration required
+```
+
+### How It Works
+
+```typescript
+// From services/wallet-engine/src/key-provider/memory-key-provider.ts
+
+export class MemoryKeyProvider implements KeyProvider {
+  private readonly keys = new Map<string, Keypair>();
+
+  async save(walletId: string, keypair: Keypair): Promise<void> {
+    this.keys.set(walletId, keypair);
+  }
+
+  async load(walletId: string): Promise<Keypair> {
+    const keypair = this.keys.get(walletId);
+    if (!keypair) {
+      throw new Error(`Memory key provider: wallet ${walletId} not found`);
+    }
+    return keypair;
+  }
+}
+```
+
+### Characteristics
+
+- **Lifetime**: Keys lost when process terminates
+- **Performance**: Fastest backend (no disk I/O)
+- **Recovery**: Impossible once process exits
+- **Isolation**: Keys isolated per process
+
+<Warning>
+  Memory backend provides no persistence. Wallets created with this backend cannot be recovered after restart.
+</Warning>
+
+## KMS Backend
+
+### Overview
+
+Keys encrypted using envelope encryption with a master secret managed by a Key Management Service.
+
+**Best for:**
+- Managed cloud environments (AWS, GCP, Azure)
+- Centralized key governance
+- Audit logging requirements
+- Key rotation policies
+
+### Configuration
+
+```bash
+WALLET_SIGNER_BACKEND=kms
+WALLET_KMS_MASTER_SECRET=your-master-secret  # Required
+WALLET_KMS_KEY_ID=wallet-engine-kms-key      # Optional (default shown)
+```
+
+<Note>
+  The current implementation is a software simulation of KMS envelope encryption. For production, integrate with AWS KMS, Google Cloud KMS, or Azure Key Vault.
+</Note>
+
+### How It Works
+
+**Envelope encryption pattern:**
+
+<Steps>
+  <Step title="Generate Data Key">
+    For each wallet, generate a random 32-byte data key
+  </Step>
+  <Step title="Wrap Data Key">
+    Encrypt the data key with the KMS master secret
+  </Step>
+  <Step title="Encrypt Private Key">
+    Encrypt the wallet's private key with the data key
+  </Step>
+  <Step title="Store Envelope">
+    Save both wrapped data key and encrypted private key
+  </Step>
+</Steps>
+
+```typescript
+// From services/wallet-engine/src/key-provider/kms-key-provider.ts
+
+async save(walletId: string, keypair: Keypair): Promise<void> {
+  const dataKey = randomBytes(32).toString('base64');
+  const wrappedDataKey = encryptText(dataKey, this.secretForWrap());
+  const encryptedSecret = encryptText(
+    Buffer.from(keypair.secretKey).toString('base64'),
+    dataKey
+  );
+  
+  const payload: KmsEnvelope = {
+    v: 1,
+    keyId: this.keyId,
+    wrappedDataKey,
+    encryptedSecret,
+    createdAt: new Date().toISOString(),
+  };
+  
+  await fs.writeFile(this.keyFile(walletId), JSON.stringify(payload), 'utf8');
+}
+```
+
+### File Format
+
+```json
+{
+  "v": 1,
+  "keyId": "wallet-engine-kms-key",
+  "wrappedDataKey": "encrypted-data-key",
+  "encryptedSecret": "encrypted-private-key",
+  "createdAt": "2026-03-08T10:00:00.000Z"
+}
+```
+
+### Benefits
+
+- **Centralized key management**: Master secret can be rotated independently
+- **Audit trail**: KMS operations can be logged
+- **Access control**: KMS policies control who can decrypt
+- **Compliance**: Meets regulatory requirements for key governance
+
+### Production Integration
+
+For production AWS KMS integration:
+
+```typescript
+import { KMSClient, DecryptCommand, GenerateDataKeyCommand } from '@aws-sdk/client-kms';
+
+const kms = new KMSClient({ region: 'us-east-1' });
+
+// Generate data key using KMS
+const { Plaintext, CiphertextBlob } = await kms.send(
+  new GenerateDataKeyCommand({
+    KeyId: process.env.WALLET_KMS_KEY_ID,
+    KeySpec: 'AES_256',
+  })
+);
+
+// Use Plaintext as data key, store CiphertextBlob as wrappedDataKey
+```
+
+## HSM Backend
+
+### Overview
+
+Keys protected by hardware security module (HSM) with hardware-rooted custody.
+
+**Best for:**
+- High-compliance environments (PCI-DSS, FIPS 140-2)
+- Financial services
+- Regulatory requirements for hardware key storage
+- Scenarios requiring physical tamper protection
+
+### Configuration
+
+```bash
+WALLET_SIGNER_BACKEND=hsm
+WALLET_HSM_PIN=your-hsm-pin                # Required
+WALLET_HSM_MODULE_SECRET=your-module-secret  # Required
+WALLET_HSM_SLOT=slot-0                       # Optional (default shown)
+```
+
+<Note>
+  The current implementation is a software simulation. For production, integrate with AWS CloudHSM, Thales Luna HSM, YubiHSM, or similar hardware.
+</Note>
+
+### How It Works
+
+```typescript
+// From services/wallet-engine/src/key-provider/hsm-key-provider.ts
+
+export class HsmKeyProvider implements KeyProvider {
+  private unwrapSecret(): string {
+    return `${this.moduleSecret}:${this.slotId}:${this.pin}`;
+  }
+
+  async save(walletId: string, keypair: Keypair): Promise<void> {
+    const payload: HsmEnvelope = {
+      v: 1,
+      slotId: this.slotId,
+      wrappedSecret: encryptText(
+        Buffer.from(keypair.secretKey).toString('base64'),
+        this.unwrapSecret()
+      ),
+      createdAt: new Date().toISOString(),
+    };
+    
+    await fs.writeFile(this.keyFile(walletId), JSON.stringify(payload), 'utf8');
+  }
+}
+```
+
+### File Format
+
+```json
+{
+  "v": 1,
+  "slotId": "slot-0",
+  "wrappedSecret": "encrypted-with-hsm-secret",
+  "createdAt": "2026-03-08T10:00:00.000Z"
+}
+```
+
+### HSM Concepts
+
+- **Slot**: Logical partition within HSM hardware
+- **PIN**: Authentication credential for accessing slot
+- **Module Secret**: Shared secret for wrapping keys at rest
+- **FIPS 140-2**: U.S. government security standard for cryptographic modules
+
+### Production Integration
+
+For production AWS CloudHSM integration:
+
+```typescript
+import { CloudHSMv2Client } from '@aws-sdk/client-cloudhsmv2';
+import * as pkcs11 from 'pkcs11js';
+
+// Initialize PKCS#11 module
+const pkcs11Module = new pkcs11.PKCS11();
+pkcs11Module.load('/opt/cloudhsm/lib/libcloudhsm_pkcs11.so');
+
+// Open session and login
+const session = pkcs11Module.C_OpenSession(slotId, flags);
+pkcs11Module.C_Login(session, userType, pin);
+
+// Generate key in HSM
+const keyHandle = pkcs11Module.C_GenerateKeyPair(
+  session,
+  mechanism,
+  publicKeyTemplate,
+  privateKeyTemplate
+);
+```
+
+## MPC Backend
+
+### Overview
+
+Keys split into multiple shares using threshold cryptography, providing distributed custody.
+
+**Best for:**
+- Distributed operational control
+- Reducing single-point-of-failure risk
+- Multi-party governance
+- Geographic distribution requirements
+
+### Configuration
+
+```bash
+WALLET_SIGNER_BACKEND=mpc
+
+# Option 1: CSV format
+WALLET_MPC_NODE_SECRETS=secret1,secret2,secret3
+
+# Option 2: Individual environment variables
+WALLET_MPC_NODE1_SECRET=secret1
+WALLET_MPC_NODE2_SECRET=secret2
+WALLET_MPC_NODE3_SECRET=secret3
+```
+
+<Warning>
+  All 3 node secrets are required. The system uses a 2-of-3 threshold: any 2 shares can reconstruct the key.
+</Warning>
+
+### How It Works
+
+**Secret Sharing Scheme:**
+
+<Steps>
+  <Step title="Split Secret">
+    Wallet private key divided into 3 shares using Galois field arithmetic (GF(256))
+  </Step>
+  <Step title="Encrypt Shares">
+    Each share encrypted with its corresponding node secret
+  </Step>
+  <Step title="Store All Shares">
+    All 3 encrypted shares stored in single envelope file
+  </Step>
+  <Step title="Reconstruct on Load">
+    Any 2 shares can reconstruct the original key using Lagrange interpolation
+  </Step>
+</Steps>
+
+```typescript
+// From services/wallet-engine/src/key-provider/mpc-key-provider.ts
+
+const splitSecret = (secret: Uint8Array): Array<{ id: number; bytes: Uint8Array }> => {
+  const coefficient = randomBytes(secret.length);
+  const s1 = new Uint8Array(secret.length);
+  const s2 = new Uint8Array(secret.length);
+  const s3 = new Uint8Array(secret.length);
+  
+  for (let i = 0; i < secret.length; i += 1) {
+    const secretByte = secret[i] ?? 0;
+    const a = coefficient[i] ?? 0;
+    s1[i] = (secretByte ^ gfMul(a, 1)) & 0xff;
+    s2[i] = (secretByte ^ gfMul(a, 2)) & 0xff;
+    s3[i] = (secretByte ^ gfMul(a, 3)) & 0xff;
+  }
+  
+  return [
+    { id: 1, bytes: s1 },
+    { id: 2, bytes: s2 },
+    { id: 3, bytes: s3 },
+  ];
+};
+```
+
+### File Format
+
+```json
+{
+  "v": 1,
+  "threshold": 2,
+  "shares": [
+    {"id": 1, "wrapped": "encrypted-with-node1-secret"},
+    {"id": 2, "wrapped": "encrypted-with-node2-secret"},
+    {"id": 3, "wrapped": "encrypted-with-node3-secret"}
+  ],
+  "createdAt": "2026-03-08T10:00:00.000Z"
+}
+```
+
+### Threshold Reconstruction
+
+Key reconstruction requires any 2 of the 3 shares:
+
+```typescript
+// From services/wallet-engine/src/key-provider/mpc-key-provider.ts
+
+const reconstructFromTwoShares = (
+  first: { id: number; bytes: Uint8Array },
+  second: { id: number; bytes: Uint8Array }
+): Uint8Array => {
+  const denominator = (first.id ^ second.id) & 0xff;
+  const l1 = gfDiv(second.id & 0xff, denominator);
+  const l2 = gfDiv(first.id & 0xff, denominator);
+  
+  const secret = new Uint8Array(first.bytes.length);
+  for (let i = 0; i < secret.length; i += 1) {
+    const y1 = first.bytes[i] ?? 0;
+    const y2 = second.bytes[i] ?? 0;
+    secret[i] = (gfMul(y1, l1) ^ gfMul(y2, l2)) & 0xff;
+  }
+  
+  return secret;
+};
+```
+
+### Benefits
+
+- **No single point of failure**: Loss of one secret doesn't compromise keys
+- **Distributed trust**: No single party holds complete key
+- **Geographic distribution**: Secrets can be stored in different regions
+- **Operational flexibility**: Any 2 of 3 nodes can sign
+
+### Production Deployment
+
+For production MPC deployments:
+
+<Steps>
+  <Step title="Generate Node Secrets">
+    Create 3 strong secrets with `openssl rand -base64 32`
+  </Step>
+  <Step title="Distribute Secrets">
+    Store each secret in a different infrastructure zone:
+    - Node 1: Region A, AWS Secrets Manager
+    - Node 2: Region B, HashiCorp Vault
+    - Node 3: Region C, Google Secret Manager
+  </Step>
+  <Step title="Access Control">
+    Configure IAM policies so no single role can access all 3 secrets
+  </Step>
+  <Step title="Backup Strategy">
+    Back up share files to different storage systems
+  </Step>
+  <Step title="Recovery Testing">
+    Regularly test 2-of-3 reconstruction in staging
+  </Step>
+</Steps>
+
+## Switching Backends
+
+Backends can be changed, but keys must be migrated:
+
+<Warning>
+  Changing `WALLET_SIGNER_BACKEND` without migrating keys will make existing wallets inaccessible.
+</Warning>
+
+### Migration Process
+
+<Steps>
+  <Step title="Export Keys">
+    Read all wallet IDs and load keypairs from current backend
+  </Step>
+  <Step title="Switch Backend">
+    Update `WALLET_SIGNER_BACKEND` and related environment variables
+  </Step>
+  <Step title="Re-save Keys">
+    Save all keypairs using new backend
+  </Step>
+  <Step title="Verify">
+    Test signing operations with migrated keys
+  </Step>
+  <Step title="Backup Old Keys">
+    Keep old key files as backup until verified
+  </Step>
+</Steps>
+
+<Note>
+  A migration utility script is planned for a future release. For now, contact support for assistance with production migrations.
+</Note>
+
+## Performance Comparison
+
+| Backend | Save Latency | Load Latency | Throughput | Notes |
+|---------|--------------|--------------|------------|-------|
+| `memory` | < 1 ms | < 1 ms | Very high | No disk I/O |
+| `encrypted-file` | 5-10 ms | 5-10 ms | High | Disk I/O bound |
+| `kms` | 10-20 ms | 10-20 ms | Medium | Double encryption |
+| `hsm` | 10-30 ms | 10-30 ms | Medium | Hardware latency |
+| `mpc` | 15-30 ms | 20-40 ms | Lower | 3 share operations |
+
+<Note>
+  Latencies are approximate and depend on hardware, storage, and network conditions.
+</Note>
+
+## Security Comparison
+
+| Backend | Key Exposure Risk | Compliance | Key Recovery | Operational Complexity |
+|---------|-------------------|------------|--------------|------------------------|
+| `memory` | High (memory dumps) | No | None | Low |
+| `encrypted-file` | Medium (host compromise) | No | Manual backup | Low |
+| `kms` | Low | Yes | KMS backup | Medium |
+| `hsm` | Very low | Yes (FIPS 140-2) | HSM failover | High |
+| `mpc` | Very low | Yes | 2-of-3 shares | High |
+
+## Recommendations
+
+### Development
+
+Use `encrypted-file` for local development:
+
+```bash
+WALLET_SIGNER_BACKEND=encrypted-file
+WALLET_KEY_ENCRYPTION_SECRET=$(openssl rand -base64 32)
+```
+
+### Testing
+
+Use `memory` for CI/CD and integration tests:
+
+```bash
+WALLET_SIGNER_BACKEND=memory
+```
+
+### Production (Cloud)
+
+Use `kms` with cloud-native key management:
+
+```bash
+WALLET_SIGNER_BACKEND=kms
+WALLET_KMS_MASTER_SECRET=arn:aws:kms:region:account:key/key-id
+```
+
+### Production (High Compliance)
+
+Use `hsm` for regulated industries:
+
+```bash
+WALLET_SIGNER_BACKEND=hsm
+WALLET_HSM_PIN=***
+WALLET_HSM_MODULE_SECRET=***
+WALLET_HSM_SLOT=slot-production
+```
+
+### Production (Distributed)
+
+Use `mpc` for multi-party custody:
+
+```bash
+WALLET_SIGNER_BACKEND=mpc
+WALLET_MPC_NODE1_SECRET=$(aws secretsmanager get-secret-value --region us-east-1 ...)
+WALLET_MPC_NODE2_SECRET=$(gcloud secrets versions access latest --secret=...)
+WALLET_MPC_NODE3_SECRET=$(vault kv get -field=value secret/mpc/node3)
+```
+
+## Related Pages
+
+<CardGroup cols={2}>
+  <Card title="Key Management" icon="key" href="/security/key-management">
+    Key isolation and lifecycle management
+  </Card>
+  <Card title="Security Overview" icon="shield" href="/security/overview">
+    Trust boundaries and protection layers
+  </Card>
+</CardGroup>

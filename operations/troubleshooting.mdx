@@ -1,0 +1,560 @@
+---
+title: 'Troubleshooting'
+description: 'Common errors, solutions, and debugging techniques for Agentic Wallet operations'
+---
+
+## Port Conflicts (EADDRINUSE)
+
+### Symptom
+
+```
+Error: listen EADDRINUSE: address already in use :::3000
+```
+
+Services fail to start because ports are already occupied by previous instances or other processes.
+
+### Solution
+
+<Steps>
+  <Step title="Identify Processes">
+    Find processes using the default ports:
+    
+    ```bash
+    # Check all Agentic Wallet service ports
+    for p in 3000 3002 3003 3004 3005 3006 3007 3008; do
+      lsof -ti tcp:$p
+    done
+    ```
+  </Step>
+  
+  <Step title="Kill Existing Processes">
+    Terminate all processes using Agentic Wallet ports:
+    
+    ```bash
+    PIDS=$(for p in 3000 3002 3003 3004 3005 3006 3007 3008; do lsof -ti tcp:$p; done | sort -u)
+    [ -n "$PIDS" ] && kill $PIDS
+    ```
+    
+    <Warning>
+      This will terminate **all** processes on these ports, including non-Agentic Wallet services. Verify PIDs before killing.
+    </Warning>
+  </Step>
+  
+  <Step title="Restart Services">
+    Re-export environment variables and start the stack:
+    
+    ```bash
+    set -a; source .env; set +a
+    npm run dev
+    ```
+  </Step>
+</Steps>
+
+### Alternative: Use Different Ports
+
+Configure custom ports in `.env`:
+
+```bash .env
+API_GATEWAY_PORT=4000
+WALLET_ENGINE_PORT=4002
+POLICY_ENGINE_PORT=4003
+AGENT_RUNTIME_PORT=4004
+PROTOCOL_ADAPTERS_PORT=4005
+TRANSACTION_ENGINE_PORT=4006
+AUDIT_OBSERVABILITY_PORT=4007
+MCP_SERVER_PORT=4008
+```
+
+## Escrow Configuration Issues
+
+### Health Check Says "Not Configured"
+
+#### Symptom
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/protocols/escrow/health
+```
+
+Response:
+```json
+{
+  "ok": false,
+  "configured": false,
+  "message": "ESCROW_PROGRAM_ID not set"
+}
+```
+
+#### Solution
+
+<Steps>
+  <Step title="Set Program ID">
+    Add the escrow program ID to `.env`:
+    
+    ```bash .env
+    ESCROW_PROGRAM_ID=YourEscrowProgramIdHere
+    ```
+  </Step>
+  
+  <Step title="Export Environment">
+    Ensure environment variables are loaded:
+    
+    ```bash
+    set -a; source .env; set +a
+    ```
+  </Step>
+  
+  <Step title="Restart Services">
+    Restart the protocol-adapters service:
+    
+    ```bash
+    # Stop all services (Ctrl+C)
+    npm run dev
+    ```
+  </Step>
+  
+  <Step title="Verify Configuration">
+    Check that the environment variable is set:
+    
+    ```bash
+    echo $ESCROW_PROGRAM_ID
+    ```
+  </Step>
+</Steps>
+
+### Health Check Says "Not Deployed"
+
+#### Symptom
+
+```json
+{
+  "ok": false,
+  "configured": true,
+  "deployed": false,
+  "message": "Program account not found on-chain"
+}
+```
+
+#### Solution
+
+Deploy the escrow program to devnet:
+
+```bash
+npm run escrow:deploy:devnet
+```
+
+This command:
+1. Syncs the program ID in source files
+2. Builds the Anchor program
+3. Deploys to devnet
+4. Updates `.env` with the deployed program ID
+
+<Note>
+  Ensure you have sufficient SOL in your deployment wallet (set via `PRIVATE_KEY` in `.env`).
+</Note>
+
+## Approval Gate Transactions Not Progressing
+
+### Symptom
+
+Transaction is stuck in `approval_gate` stage:
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/transactions/<txId>
+```
+
+Response:
+```json
+{
+  "txId": "tx_abc123",
+  "stage": "approval_gate",
+  "status": "pending",
+  "policyDecision": "require_approval"
+}
+```
+
+### Solution
+
+Transactions requiring approval must be explicitly approved or rejected:
+
+<CodeGroup>
+```bash Approve
+curl -X POST -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/transactions/<txId>/approve
+```
+
+```bash Reject
+curl -X POST -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/transactions/<txId>/reject
+```
+</CodeGroup>
+
+### List Pending Approvals
+
+Find all transactions waiting for approval:
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/wallets/<walletId>/pending-approvals
+```
+
+<Accordion title="Why Transactions Require Approval">
+  The policy engine can return three decisions:
+  
+  - **allow** - Transaction proceeds automatically
+  - **deny** - Transaction is rejected immediately
+  - **require_approval** - Transaction pauses at approval gate
+  
+  Policies return `require_approval` when:
+  - Transaction exceeds spending limits but is within an "operator review" threshold
+  - Agent is in supervised mode
+  - Protocol or token is on a watchlist
+  - Custom policy rules require human review
+</Accordion>
+
+## Transfer Fails with Rent Error
+
+### Symptom
+
+```json
+{
+  "error": "Simulation failed",
+  "message": "Insufficient lamports for rent"
+}
+```
+
+### Solution
+
+Solana accounts must maintain a minimum balance for rent exemption. If the recipient account is unfunded:
+
+<Steps>
+  <Step title="Fund Recipient First">
+    Ensure the recipient wallet has enough SOL to be rent-exempt:
+    
+    ```bash
+    # Devnet faucet
+    solana airdrop 1 <recipientAddress> --url devnet
+    ```
+  </Step>
+  
+  <Step title="Increase Transfer Amount">
+    Transfer enough to keep both sender and recipient above rent-exempt minimum (~0.00089 SOL).
+    
+    ```json
+    {
+      "type": "transfer_sol",
+      "walletId": "wallet_abc",
+      "protocol": "system-program",
+      "intent": {
+        "destination": "RecipientPublicKey",
+        "lamports": 5000000  // 0.005 SOL, well above rent minimum
+      }
+    }
+    ```
+  </Step>
+</Steps>
+
+<Note>
+  The rent-exempt minimum for a system account is approximately **890,880 lamports** (0.00089088 SOL).
+</Note>
+
+## DEX or DeFi Protocol Failures
+
+### Symptom
+
+```json
+{
+  "error": "Protocol adapter failed",
+  "protocol": "jupiter",
+  "message": "Quote request failed: 503 Service Unavailable"
+}
+```
+
+### Solution
+
+Protocol adapters are **fail-closed** for safety. Upstream API outages return errors instead of synthetic success.
+
+<Steps>
+  <Step title="Check Protocol Health">
+    Verify the protocol adapter status:
+    
+    ```bash
+    curl -H 'x-api-key: dev-api-key' \
+      http://localhost:3000/api/v1/protocols/jupiter/health
+    ```
+  </Step>
+  
+  <Step title="Retry Later">
+    If the upstream service is unavailable, retry the operation after the service recovers.
+  </Step>
+  
+  <Step title="Use Alternative Protocol">
+    If one DEX is down, try an alternative:
+    
+    - Jupiter → Orca or Raydium for swaps
+    - Check protocol capabilities: `GET /api/v1/protocols`
+  </Step>
+</Steps>
+
+<Accordion title="Why Fail-Closed?">
+  Fail-closed design prevents:
+  - Silent failures masquerading as success
+  - Agents proceeding with stale or invalid quotes
+  - Execution at unfavorable rates due to simulation drift
+  
+  Instead of degrading gracefully, the system surfaces errors immediately for operator review or automatic retry.
+</Accordion>
+
+## Environment Variables Not Loaded
+
+### Symptom
+
+Services start but behave as if configuration is missing:
+
+- Escrow reports "not configured" even though `ESCROW_PROGRAM_ID` is in `.env`
+- Gateway rejects valid API keys
+- RPC pool uses only the default endpoint
+
+### Solution
+
+Export environment variables to the shell before starting services:
+
+```bash
+set -a        # Enable automatic export of variables
+source .env   # Load .env file
+set +a        # Disable automatic export
+npm run dev   # Start services with loaded environment
+```
+
+<Warning>
+  Running `npm run dev` without exporting environment variables will use default values or empty strings, not the values in `.env`.
+</Warning>
+
+### Verify Environment
+
+Check that variables are actually set:
+
+```bash
+echo $ESCROW_PROGRAM_ID
+echo $API_GATEWAY_API_KEYS
+echo $SOLANA_RPC_POOL_URLS
+```
+
+## Transaction Stuck in "Submitting" Stage
+
+### Symptom
+
+```json
+{
+  "txId": "tx_abc123",
+  "stage": "submitting",
+  "status": "pending",
+  "createdAt": "2026-03-08T09:00:00.000Z"
+}
+```
+
+Transaction remains in `submitting` for an extended period.
+
+### Diagnosis
+
+<Steps>
+  <Step title="Check Outbox Queue">
+    Verify the transaction is in the outbox:
+    
+    ```bash
+    curl -H 'x-api-key: dev-api-key' \
+      http://localhost:3000/api/v1/outbox/stats
+    ```
+    
+    Look for `processing` or `pending` jobs.
+  </Step>
+  
+  <Step title="Check RPC Pool Status">
+    Verify RPC endpoints are healthy:
+    
+    ```bash
+    curl -H 'x-api-key: dev-api-key' \
+      http://localhost:3000/api/v1/rpc/pool/status
+    ```
+    
+    Look for:
+    - Low health scores (< 0.5)
+    - High failure counts
+    - All endpoints with recent errors
+  </Step>
+  
+  <Step title="Check Network Congestion">
+    Devnet or mainnet may be experiencing congestion. Check:
+    - Solana status page
+    - Block explorer for recent block times
+  </Step>
+</Steps>
+
+### Solutions
+
+<CodeGroup>
+```bash Retry Transaction
+curl -X POST -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/transactions/<txId>/retry
+```
+
+```bash Add RPC Endpoints
+# Edit .env to add more RPC endpoints
+SOLANA_RPC_POOL_URLS=https://api.devnet.solana.com,https://rpc.ankr.com/solana_devnet,https://devnet.helius-rpc.com
+
+# Restart services
+set -a; source .env; set +a
+npm run dev
+```
+</CodeGroup>
+
+<Note>
+  The outbox queue will automatically retry failed submissions up to `TX_OUTBOX_MAX_ATTEMPTS` times (default: 6).
+</Note>
+
+## Database Lock Errors
+
+### Symptom
+
+```
+SqliteError: database is locked
+```
+
+### Solution
+
+<Steps>
+  <Step title="Stop All Services">
+    Ensure no services are accessing the database:
+    
+    ```bash
+    # Press Ctrl+C to stop npm run dev
+    
+    # Kill any lingering processes
+    PIDS=$(for p in 3000 3002 3003 3004 3005 3006 3007 3008; do lsof -ti tcp:$p; done | sort -u)
+    [ -n "$PIDS" ] && kill $PIDS
+    ```
+  </Step>
+  
+  <Step title="Check for Stale Locks">
+    Look for `-wal` and `-shm` files:
+    
+    ```bash
+    find services -name "*.sqlite*"
+    ```
+    
+    Remove stale WAL files if no processes are running:
+    
+    ```bash
+    find services -name "*.sqlite-wal" -delete
+    find services -name "*.sqlite-shm" -delete
+    ```
+  </Step>
+  
+  <Step title="Restart Services">
+    ```bash
+    set -a; source .env; set +a
+    npm run dev
+    ```
+  </Step>
+</Steps>
+
+<Warning>
+  **Only delete WAL files when all services are stopped.** Deleting WAL files while a service is running can cause data corruption.
+</Warning>
+
+## Debugging Transaction Failures
+
+### Get Transaction Details
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/transactions/<txId>
+```
+
+Look for:
+- `stage` - Where the transaction failed
+- `status` - Current status (`failed`, `pending`, etc.)
+- `error` - Error message
+- `failedAt` - Deterministic failure stage
+- `history` - Stage transition log
+
+### Get Execution Proof
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/transactions/<txId>/proof
+```
+
+Verify cryptographic hashes for:
+- Intent payload
+- Policy decision
+- Simulation result
+
+### Get Replay Data
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  http://localhost:3000/api/v1/transactions/<txId>/replay
+```
+
+Reconstruct the full execution context:
+- Original request
+- Policy evaluation
+- Simulation output
+- Proof artifacts
+- Stage history
+
+### Query Audit Events
+
+```bash
+curl -H 'x-api-key: dev-api-key' \
+  "http://localhost:3000/api/v1/audit/events?txId=<txId>"
+```
+
+Review audit trail for:
+- Transaction created
+- Policy evaluated
+- Simulation completed
+- Signature generated
+- Submission attempts
+- Confirmation or failure
+
+<Accordion title="Common Failure Stages">
+  - **validation** - Request schema or parameter validation failed
+  - **policy** - Policy engine denied the transaction
+  - **build** - Protocol adapter failed to build transaction
+  - **sign** - Wallet engine could not sign (missing key, incorrect signer backend)
+  - **send** - RPC submission failed
+  - **confirm** - Transaction did not confirm within timeout
+</Accordion>
+
+## Getting Help
+
+If you encounter an issue not covered here:
+
+<Steps>
+  <Step title="Check Logs">
+    Review service logs for error messages and stack traces.
+  </Step>
+  
+  <Step title="Run Doctor">
+    ```bash
+    npm run cli -- doctor
+    ```
+  </Step>
+  
+  <Step title="Review Documentation">
+    - [Security Model](/security/overview)
+    - [Transaction Execution Flow](/architecture/execution-flow)
+    - [Policy Concepts](/concepts/policies)
+  </Step>
+  
+  <Step title="Report Issues">
+    Open an issue on GitHub with:
+    - Error messages and logs
+    - `doctor` command output
+    - Transaction ID (if applicable)
+    - Steps to reproduce
+  </Step>
+</Steps>

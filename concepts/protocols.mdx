@@ -1,0 +1,543 @@
+---
+title: Protocols
+description: Protocol adapter registry, supported protocols, and quote/build flow
+---
+
+# Protocols
+
+Protocol adapters abstract blockchain interactions into a unified interface. They handle quote generation, transaction building, and protocol-specific logic.
+
+## Protocol Adapter Interface
+
+```typescript
+interface ProtocolAdapter {
+  readonly name: string;              // Protocol identifier
+  readonly version: string;           // Adapter version (semver)
+  readonly programIds: string[];      // On-chain program addresses
+  readonly capabilities: string[];    // Supported operations
+  
+  // Swap operations
+  getSwapQuote?(params: SwapQuoteParams): Promise<SwapQuote>;
+  buildSwap?(params: SwapExecuteParams): Promise<BuildResult>;
+  
+  // Staking operations
+  buildStake?(params: StakeParams): Promise<BuildResult>;
+  buildUnstake?(params: StakeParams): Promise<BuildResult>;
+  
+  // Lending operations
+  buildSupply?(params: LendingParams): Promise<BuildResult>;
+  buildBorrow?(params: LendingParams): Promise<BuildResult>;
+  
+  // Generic intent builder
+  buildIntent?(
+    intentType: string,
+    walletAddress: string,
+    intent: Record<string, unknown>
+  ): Promise<BuildResult>;
+  
+  // Intent migration
+  migrateIntent?(
+    input: MigrationInput
+  ): Promise<Record<string, unknown>>;
+  
+  // Health check
+  healthCheck?(): Promise<AdapterHealth>;
+}
+```
+
+## Supported Protocols
+
+Agentic Wallet includes adapters for 9 protocols:
+
+<CardGroup cols={3}>
+  <Card title="System Program" icon="code">
+    **Native SOL transfers**
+    
+    - transfer_sol
+    - Program ID: `11111111111111111111111111111111`
+  </Card>
+  
+  <Card title="SPL Token" icon="coins">
+    **Token operations**
+    
+    - transfer_spl
+    - create_mint
+    - mint_token
+    - Program ID: `TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA`
+  </Card>
+  
+  <Card title="Jupiter" icon="arrow-right-arrow-left">
+    **DEX aggregator**
+    
+    - swap (quote + build)
+    - Version: 1.0.0
+    - API: `https://lite-api.jup.ag/swap/v1`
+  </Card>
+  
+  <Card title="Marinade" icon="water">
+    **Liquid staking**
+    
+    - stake
+    - unstake
+    - Capabilities: `stake`, `unstake`
+  </Card>
+  
+  <Card title="Solend" icon="building-columns">
+    **Lending protocol**
+    
+    - lend_supply
+    - lend_borrow
+    - Fail-closed quotes
+  </Card>
+  
+  <Card title="Metaplex" icon="image">
+    **NFT operations**
+    
+    - NFT minting
+    - Metadata creation
+  </Card>
+  
+  <Card title="Orca" icon="fish">
+    **DEX and liquidity**
+    
+    - swap
+    - Whirlpools support
+  </Card>
+  
+  <Card title="Raydium" icon="chart-line">
+    **AMM and farms**
+    
+    - swap
+    - Pool interactions
+  </Card>
+  
+  <Card title="Escrow" icon="handshake">
+    **Custom escrow program**
+    
+    - create_escrow
+    - accept_escrow
+    - release_escrow
+    - refund_escrow
+    - dispute_escrow
+    - resolve_dispute
+  </Card>
+</CardGroup>
+
+<Note>
+Solend, Orca, and Raydium adapters now **fail closed** instead of returning synthetic quotes. This prevents execution if external APIs are unavailable.
+</Note>
+
+## Protocol Registry
+
+The `AdapterRegistry` manages protocol lifecycle:
+
+```typescript
+// services/protocol-adapters/src/registry.ts
+class AdapterRegistry {
+  private readonly adapters = new Map<string, ProtocolAdapter>();
+  
+  register(adapter: ProtocolAdapter): void;
+  get(name: string): ProtocolAdapter | null;
+  list(): ProtocolAdapter[];
+  
+  registerMigration(protocol: string, migration: AdapterMigration): void;
+  checkCompatibility(protocol: string, targetVersion: string): CompatibilityResult;
+  migrateIntent(protocol: string, input: MigrationInput): Promise<MigratedIntent>;
+}
+```
+
+### Listing Protocols
+
+<CodeGroup>
+```bash CLI
+npm run cli -- protocol list
+```
+
+```bash HTTP API
+curl http://localhost:3000/api/v1/protocols
+```
+</CodeGroup>
+
+**Response:**
+```json
+{
+  "data": [
+    {
+      "protocol": "jupiter",
+      "version": "1.0.0",
+      "capabilities": ["swap", "getQuote"],
+      "programIds": [
+        "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
+      ]
+    },
+    {
+      "protocol": "marinade",
+      "version": "1.0.0",
+      "capabilities": ["stake", "unstake"],
+      "programIds": [
+        "MarBmsSgKXdrN1egZf5sqe1TMai9K1rChYNDJgjq7aD"
+      ]
+    }
+  ]
+}
+```
+
+### Protocol Capabilities
+
+Query specific protocol capabilities:
+
+```bash
+npm run cli -- protocol caps jupiter
+```
+
+**Response:**
+```json
+{
+  "data": {
+    "protocol": "jupiter",
+    "version": "1.0.0",
+    "capabilities": ["swap", "getQuote"],
+    "programIds": [
+      "JUP6LkbZbjS1jKKwapdHNy74zcZ3tLUZoi5QNyVTaV4"
+    ]
+  }
+}
+```
+
+## Quote/Build Flow
+
+Protocol adapters follow a two-phase pattern:
+
+### 1. Quote Phase (Read-Only)
+
+Generate a quote without executing:
+
+```typescript
+interface SwapQuoteParams {
+  inputMint: string;
+  outputMint: string;
+  amount: string;
+  slippageBps?: number;
+  walletAddress: string;
+}
+
+interface SwapQuote {
+  inputMint: string;
+  outputMint: string;
+  inputAmount: string;
+  outputAmount: string;
+  priceImpactPct: number;
+  fee: string;
+  route: unknown;
+}
+```
+
+**Example:**
+```bash
+npm run cli -- protocol quote \
+  --protocol jupiter \
+  --input-mint So11111111111111111111111111111111111111112 \
+  --output-mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v \
+  --amount 1000000000 \
+  --wallet 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g
+```
+
+### 2. Build Phase (Transaction Construction)
+
+Convert quote into executable transaction:
+
+```typescript
+interface BuildResult {
+  mode: 'transaction' | 'instructions';
+  transaction?: string;              // Base64 serialized transaction
+  instructions?: SerializedInstruction[]; // Individual instructions
+  programIds: string[];              // Programs invoked
+  metadata?: Record<string, unknown>; // Protocol-specific data
+}
+```
+
+**Example flow:**
+```typescript
+// services/protocol-adapters/src/index.ts:88
+if (type === 'swap' && adapter.getSwapQuote && adapter.buildSwap) {
+  // Phase 1: Get quote
+  const quote = await adapter.getSwapQuote({
+    inputMint: intent['inputMint'],
+    outputMint: intent['outputMint'],
+    amount: intent['amount'],
+    slippageBps: intent['slippageBps'] ?? 50,
+    walletAddress,
+  });
+  
+  // Phase 2: Build transaction
+  return adapter.buildSwap({ walletAddress, quote });
+}
+```
+
+## Protocol-Specific Operations
+
+### Jupiter Swaps
+
+```bash
+npm run cli -- protocol swap \
+  --protocol jupiter \
+  --input-mint So11111111111111111111111111111111111111112 \
+  --output-mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v \
+  --amount 1000000000 \
+  --wallet 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g \
+  --slippage-bps 50
+```
+
+### Marinade Staking
+
+```bash
+npm run cli -- protocol stake \
+  --protocol marinade \
+  --wallet 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g \
+  --amount 1000000000
+```
+
+### Solend Lending
+
+```bash
+npm run cli -- protocol lend-supply \
+  --protocol solend \
+  --wallet 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g \
+  --mint EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v \
+  --amount 1000000
+```
+
+### Escrow Operations
+
+<CodeGroup>
+```bash Create Escrow
+npm run cli -- protocol escrow-create \
+  --wallet 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g \
+  --intent '{"amount":1000000000,"recipient":"..."}'
+```
+
+```bash Accept Escrow
+npm run cli -- protocol escrow-accept \
+  --id <escrowId> \
+  --wallet 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g
+```
+
+```bash Release Escrow
+npm run cli -- protocol escrow-release \
+  --id <escrowId> \
+  --wallet 9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g
+```
+</CodeGroup>
+
+<Warning>
+The escrow adapter requires a deployed escrow program. Set `ESCROW_PROGRAM_ID` in your environment. This repository does not ship a pre-deployed program artifact.
+</Warning>
+
+## Protocol Health Checks
+
+Adapters can implement health checks:
+
+```typescript
+interface AdapterHealth {
+  ok: boolean;
+  details?: Record<string, unknown>;
+}
+```
+
+### Checking Health
+
+<CodeGroup>
+```bash All Protocols
+curl http://localhost:3000/api/v1/protocols/health
+```
+
+```bash Specific Protocol
+curl http://localhost:3000/api/v1/protocols/jupiter/health
+```
+</CodeGroup>
+
+**Response:**
+```json
+{
+  "data": {
+    "ok": true,
+    "checks": [
+      {
+        "protocol": "jupiter",
+        "version": "1.0.0",
+        "ok": true,
+        "details": { "mode": "api", "endpoint": "https://lite-api.jup.ag" }
+      },
+      {
+        "protocol": "marinade",
+        "version": "1.0.0",
+        "ok": true,
+        "details": { "mode": "static" }
+      }
+    ]
+  }
+}
+```
+
+## Protocol Versioning
+
+Adapters use semantic versioning. Check compatibility:
+
+```bash
+curl -X POST http://localhost:3000/api/v1/protocols/jupiter/compatibility-check \
+  -H "Content-Type: application/json" \
+  -d '{"targetVersion":"2.0.0"}'
+```
+
+**Response:**
+```json
+{
+  "data": {
+    "compatible": false,
+    "currentVersion": "1.0.0",
+    "reason": "Major version mismatch 1.0.0 -> 2.0.0"
+  }
+}
+```
+
+**Compatibility rules:**
+- Same major version: Compatible
+- Different major version: Incompatible (breaking changes)
+
+## Intent Migration
+
+Migrate intents between adapter versions:
+
+```typescript
+interface AdapterMigration {
+  fromVersion: string;
+  toVersion: string;
+  migrate: (type: string, intent: Record<string, unknown>) => Record<string, unknown>;
+}
+```
+
+**Example migration:**
+```typescript
+// services/protocol-adapters/src/index.ts:65
+registry.registerMigration('jupiter', {
+  fromVersion: '0.9.0',
+  toVersion: '1.0.0',
+  migrate: (_type, intent) => ({
+    ...intent,
+    ...(intent['maxSlippageBps'] === undefined && intent['slippageBps'] !== undefined
+      ? { maxSlippageBps: intent['slippageBps'] }
+      : {}),
+  }),
+});
+```
+
+### Migrating Intents
+
+```bash
+curl -X POST http://localhost:3000/api/v1/protocols/jupiter/migrate-intent \
+  -H "Content-Type: application/json" \
+  -d '{
+    "fromVersion": "0.9.0",
+    "toVersion": "1.0.0",
+    "type": "swap",
+    "intent": {
+      "inputMint": "...",
+      "outputMint": "...",
+      "amount": "1000000",
+      "slippageBps": 50
+    }
+  }'
+```
+
+**Response:**
+```json
+{
+  "data": {
+    "intent": {
+      "inputMint": "...",
+      "outputMint": "...",
+      "amount": "1000000",
+      "slippageBps": 50,
+      "maxSlippageBps": 50
+    },
+    "migrationApplied": true
+  }
+}
+```
+
+## Generic Build Endpoint
+
+Build transactions for any protocol/intent combination:
+
+```bash
+curl -X POST http://localhost:3000/api/v1/build \
+  -H "Content-Type: application/json" \
+  -d '{
+    "protocol": "jupiter",
+    "type": "swap",
+    "walletAddress": "9B5XszUGdMaxCZ7uSQhPzdks5ZQSmWxrmzCSvtJ6Ns6g",
+    "intent": {
+      "inputMint": "So11111111111111111111111111111111111111112",
+      "outputMint": "EPjFWdd5AufqSSqeM2qN1xzybapC8G4wEGGkZwyTDt1v",
+      "amount": "1000000000",
+      "slippageBps": 50
+    }
+  }'
+```
+
+## Configuration
+
+```bash
+# Jupiter API endpoint
+JUPITER_API_URL=https://lite-api.jup.ag/swap/v1
+
+# Escrow program
+ESCROW_PROGRAM_ID=YourEscrowProgramIdHere
+
+# Protocol service
+PORT=3005
+```
+
+## Best Practices
+
+<Accordion title="Protocol Selection">
+  1. Use `jupiter` for best swap prices (aggregates multiple DEXes)
+  2. Use `marinade` for liquid staking (mSOL receipt tokens)
+  3. Check protocol health before execution
+  4. Implement fallback protocols for critical paths
+  5. Monitor adapter version updates
+</Accordion>
+
+<Accordion title="Quote Handling">
+  1. Always fetch fresh quotes (quotes expire quickly)
+  2. Validate slippage before execution
+  3. Check `priceImpactPct` for large trades
+  4. Handle quote failures gracefully (fail-closed)
+  5. Don't cache quotes across requests
+</Accordion>
+
+<Accordion title="Error Handling">
+  1. DEX adapters may fail if external APIs are down
+  2. Implement retries for transient failures
+  3. Check `AdapterHealth` before submission
+  4. Validate `programIds` match expected values
+  5. Monitor adapter error rates
+</Accordion>
+
+<Accordion title="Security">
+  1. Validate program IDs returned in `BuildResult`
+  2. Use protocol allowlists in policies
+  3. Set per-protocol risk rules
+  4. Audit adapter code before production use
+  5. Monitor for unexpected protocol behavior
+</Accordion>
+
+## Source Code Reference
+
+Protocol adapter functionality is implemented in:
+
+- `services/protocol-adapters/src/index.ts` - Main service (services/protocol-adapters/src/index.ts:1)
+- `services/protocol-adapters/src/registry.ts` - Adapter registry (services/protocol-adapters/src/registry.ts:1)
+- `services/protocol-adapters/src/adapters/adapter.interface.ts` - Interface definitions (services/protocol-adapters/src/adapters/adapter.interface.ts:1)
+- `services/protocol-adapters/src/adapters/jupiter.adapter.ts` - Jupiter implementation (services/protocol-adapters/src/adapters/jupiter.adapter.ts:1)
+- `services/protocol-adapters/src/adapters/escrow.adapter.ts` - Escrow implementation (services/protocol-adapters/src/adapters/escrow.adapter.ts:1)

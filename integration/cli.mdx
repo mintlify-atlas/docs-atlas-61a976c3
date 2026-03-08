@@ -1,0 +1,597 @@
+---
+title: 'CLI Integration'
+description: 'Command-line interface for interacting with the Agentic Wallet platform'
+icon: 'terminal'
+---
+
+## Overview
+
+The Agentic Wallet CLI is a full-featured command-line tool for managing wallets, agents, transactions, policies, and all platform operations. Built with TypeScript and the typed SDK client.
+
+## Installation
+
+<CodeGroup>
+```bash Clone Repository
+git clone <repository-url>
+cd agentic-wallet
+npm install
+```
+
+```bash Environment Setup
+cp .env.example .env
+# Edit .env with your configuration
+set -a; source .env; set +a
+```
+</CodeGroup>
+
+## Quick Start
+
+```bash
+# Run health check
+npm run cli -- doctor
+
+# Interactive mode
+npm run cli -- interactive
+
+# Create a wallet
+npm run cli -- wallet create trader-1
+
+# Get help
+npm run cli -- --help
+```
+
+## Command Groups
+
+The CLI is organized into logical command groups, each with dedicated subcommands.
+
+### Wallet Operations
+
+Manage wallet creation, balances, and token holdings.
+
+<CodeGroup>
+```bash Create Wallet
+npm run cli -- wallet create [label]
+npm run cli -- wallet create trader-1 --auto-fund --fund-lamports 2000000
+```
+
+```bash Query Wallet
+npm run cli -- wallet get <walletId>
+npm run cli -- wallet balance <walletId>
+npm run cli -- wallet tokens <walletId>
+```
+</CodeGroup>
+
+### Agent Operations
+
+Create and manage autonomous or supervised AI agents.
+
+<CodeGroup>
+```bash Agent Lifecycle
+npm run cli -- agent create <name> \
+  --wallet-id <walletId> \
+  --mode autonomous \
+  --intents transfer_sol swap query_balance
+
+npm run cli -- agent list
+npm run cli -- agent get <agentId>
+npm run cli -- agent start <agentId>
+npm run cli -- agent stop <agentId>
+npm run cli -- agent pause <agentId> --reason "manual review"
+npm run cli -- agent resume <agentId>
+```
+
+```bash Agent Budget & Capabilities
+npm run cli -- agent budget <agentId>
+npm run cli -- agent caps-set <agentId> \
+  --intents transfer_sol swap \
+  --mode autonomous
+```
+
+```bash Agent Manifests
+npm run cli -- agent manifest-issue <agentId> \
+  --intents transfer_sol swap \
+  --protocols system-program jupiter \
+  --ttl 3600
+
+npm run cli -- agent manifest-verify <agentId> \
+  --manifest '{"manifestId":"..."}'
+```
+
+```bash Execute Intent
+npm run cli -- agent exec <agentId> \
+  --type transfer_sol \
+  --protocol system-program \
+  --intent '{"destination":"...","lamports":1000000}' \
+  --gasless
+```
+</CodeGroup>
+
+### Transaction Operations
+
+Create, monitor, and manage transaction lifecycle.
+
+<CodeGroup>
+```bash Create Transaction
+npm run cli -- tx create \
+  --wallet-id <walletId> \
+  --type transfer_sol \
+  --protocol system-program \
+  --intent '{"destination":"...","lamports":1000000}' \
+  --agent-id <agentId> \
+  --gasless \
+  --idempotency-key <key>
+```
+
+```bash Transaction Status
+npm run cli -- tx get <txId>
+npm run cli -- tx proof <txId>
+npm run cli -- tx replay <txId>
+npm run cli -- tx retry <txId>
+```
+
+```bash Approval Flow
+npm run cli -- tx approve <txId>
+npm run cli -- tx reject <txId>
+```
+
+```bash List Transactions
+npm run cli -- tx list --wallet-id <walletId>
+npm run cli -- tx pending --wallet-id <walletId>
+npm run cli -- tx positions --wallet-id <walletId>
+npm run cli -- tx escrows --wallet-id <walletId>
+```
+</CodeGroup>
+
+### Policy Operations
+
+Manage wallet policies, rules, and governance.
+
+<CodeGroup>
+```bash Create Policy
+npm run cli -- policy create \
+  --wallet-id <walletId> \
+  --name "spending-limits" \
+  --rules '[{"type":"spending_limit","maxLamportsPerTx":1000000}]' \
+  --active true
+```
+
+```bash List & Version Management
+npm run cli -- policy list --wallet-id <walletId>
+npm run cli -- policy versions <policyId>
+npm run cli -- policy version <policyId> --number 1
+```
+
+```bash Migration & Compatibility
+npm run cli -- policy migrate <policyId> \
+  --target-version 2 \
+  --mode safe
+
+npm run cli -- policy compatibility-check \
+  --rules '[{"type":"spending_limit"}]'
+```
+
+```bash Policy Evaluation
+npm run cli -- policy evaluate \
+  --wallet-id <walletId> \
+  --type transfer_sol \
+  --protocol system-program \
+  --destination <address> \
+  --amount-lamports 1000000
+```
+</CodeGroup>
+
+### Protocol Operations
+
+Interact with DeFi protocols and adapters.
+
+<CodeGroup>
+```bash Protocol Discovery
+npm run cli -- protocol list
+npm run cli -- protocol caps <protocol>
+```
+
+```bash DeFi Operations
+npm run cli -- protocol quote \
+  --protocol jupiter \
+  --input-mint <mint> \
+  --output-mint <mint> \
+  --amount <amount> \
+  --wallet <walletAddress> \
+  --slippage-bps 50
+
+npm run cli -- protocol swap \
+  --protocol jupiter \
+  --input-mint <mint> \
+  --output-mint <mint> \
+  --amount <amount> \
+  --wallet <walletAddress>
+```
+
+```bash Staking Operations
+npm run cli -- protocol stake \
+  --protocol marinade \
+  --wallet <walletAddress> \
+  --amount <amount> \
+  --validator <validator>
+
+npm run cli -- protocol unstake \
+  --protocol marinade \
+  --wallet <walletAddress> \
+  --amount <amount>
+```
+
+```bash Lending Operations
+npm run cli -- protocol lend-supply \
+  --protocol solend \
+  --wallet <walletAddress> \
+  --mint <mint> \
+  --amount <amount>
+
+npm run cli -- protocol lend-borrow \
+  --protocol solend \
+  --wallet <walletAddress> \
+  --mint <mint> \
+  --amount <amount>
+```
+
+```bash Escrow Operations
+npm run cli -- protocol escrow-create \
+  --wallet <walletAddress> \
+  --protocol escrow \
+  --intent '{"escrowNumericId":"900001","counterparty":"..."}'
+
+npm run cli -- protocol escrow-accept \
+  --id <escrowId> \
+  --wallet <walletAddress>
+
+npm run cli -- protocol escrow-release \
+  --id <escrowId> \
+  --wallet <walletAddress>
+```
+</CodeGroup>
+
+### Risk & Strategy Operations
+
+<CodeGroup>
+```bash Risk Controls
+npm run cli -- risk protocols
+npm run cli -- risk protocol-get jupiter
+npm run cli -- risk protocol-set jupiter \
+  --input '{"slippageBps":75,"maxNotionalLamports":100000000}'
+
+npm run cli -- risk portfolio-get <walletId>
+npm run cli -- risk portfolio-set <walletId> \
+  --input '{"maxExposureLamports":500000000}'
+```
+
+```bash Chaos Engineering
+npm run cli -- risk chaos
+npm run cli -- risk chaos-set \
+  --enabled false \
+  --latency-ms 0
+```
+
+```bash Strategy Backtesting
+npm run cli -- strategy backtest \
+  --wallet-id <walletId> \
+  --name smoke \
+  --steps '[{"type":"transfer_sol","protocol":"system-program","intent":{"destination":"...","lamports":1000},"timestamp":"2026-01-01T00:00:00.000Z"}]'
+```
+
+```bash Paper Trading
+npm run cli -- strategy paper-execute \
+  --agent-id <agentId> \
+  --wallet-id <walletId> \
+  --type query_balance \
+  --protocol system-program \
+  --intent '{}'
+
+npm run cli -- strategy paper-list <agentId>
+```
+</CodeGroup>
+
+### Treasury Operations
+
+```bash Treasury Management
+npm run cli -- treasury allocate \
+  --target-agent-id <agentId> \
+  --lamports 1000000 \
+  --reason "initial budget"
+
+npm run cli -- treasury rebalance \
+  --source-agent-id <agentA> \
+  --target-agent-id <agentB> \
+  --lamports 500000
+```
+
+### MCP Operations
+
+```bash MCP Tools
+npm run cli -- mcp tools
+npm run cli -- mcp call wallet.balance \
+  --args '{"walletId":"<walletId>"}'
+```
+
+### Audit & Observability
+
+```bash Audit Events
+npm run cli -- audit events \
+  --tx-id <txId> \
+  --agent-id <agentId> \
+  --wallet-id <walletId> \
+  --protocol <protocol> \
+  --escrow-id <escrowId>
+
+npm run cli -- audit metrics
+```
+
+## Interactive Mode
+
+The CLI includes a full interactive wizard mode with guided prompts.
+
+```bash Launch Interactive Mode
+npm run cli -- interactive
+```
+
+<Accordion title="Interactive Features">
+- **Doctor / Health checks**: Verify all services are running
+- **Wallet wizard**: Create wallets and check balances
+- **Agent wizard**: Create, manage, and execute agent intents
+- **Transaction wizard**: Full transaction lifecycle management
+- **Policy wizard**: Create and evaluate policies
+- **Risk wizard**: Manage protocol and portfolio risk controls
+- **Strategy wizard**: Run backtests and paper trades
+- **Treasury wizard**: Allocate and rebalance budgets
+- **MCP wizard**: Call MCP tools interactively
+- **Metrics**: View observability metrics
+
+**Navigation**:
+- `↑/↓`: Navigate menu options
+- `Enter`: Select option
+- `Ctrl+C` or `Esc`: Exit
+- Choose "Back" option to return to main menu
+</Accordion>
+
+## Themes
+
+The CLI supports multiple visual themes for terminal output.
+
+```bash Available Themes
+npm run cli -- --theme midnight doctor
+npm run cli -- --theme matrix doctor
+npm run cli -- --theme solarized doctor
+npm run cli -- --theme fire doctor
+```
+
+<CardGroup cols={2}>
+  <Card title="Midnight" icon="moon">
+    Cyan and blue gradient with rounded borders
+  </Card>
+  <Card title="Matrix" icon="code">
+    Classic green on black with bold borders (default)
+  </Card>
+  <Card title="Solarized" icon="sun">
+    Warm teal and amber tones with double borders
+  </Card>
+  <Card title="Fire" icon="fire">
+    Orange and red gradient with heavy borders
+  </Card>
+</CardGroup>
+
+## Global Options
+
+```bash CLI Options
+npm run cli -- \
+  --api <url>              # API base URL (default: http://localhost:3000)
+  --key <apiKey>           # Gateway API key (default: dev-api-key)
+  --tenant <tenantId>      # Optional tenant ID
+  --theme <name>           # Theme: midnight|matrix|solarized|fire
+  --banner                 # Show startup banner
+  --animated-banner        # Play animated startup banner
+  --raw                    # Output raw JSON
+  -q, --quiet              # Quiet mode (less spinner noise)
+```
+
+## Output Formats
+
+By default, the CLI presents data in formatted tables with color-coded status chips.
+
+<Tabs>
+  <Tab title="Default (Formatted)">
+    ```bash
+    npm run cli -- wallet balance <walletId>
+    ```
+    
+    Displays a formatted table with:
+    - Color-coded status indicators
+    - Truncated IDs for readability
+    - Latency highlighting (green < 350ms, yellow < 1000ms, red ≥ 1000ms)
+  </Tab>
+  
+  <Tab title="Raw JSON">
+    ```bash
+    npm run cli -- --raw wallet balance <walletId>
+    ```
+    
+    Outputs raw JSON for parsing:
+    ```json
+    {
+      "walletId": "...",
+      "publicKey": "...",
+      "lamports": 1000000000,
+      "sol": 1.0
+    }
+    ```
+  </Tab>
+</Tabs>
+
+## Configuration
+
+CLI configuration can be set via environment variables or command-line flags.
+
+```bash Environment Variables
+export API_BASE_URL=http://localhost:3000
+export API_KEY=dev-api-key
+export TENANT_ID=my-tenant
+export CLI_THEME=matrix
+export CLI_BANNER=true
+export CLI_ANIMATED_BANNER=true
+```
+
+## Doctor Command
+
+The `doctor` command performs comprehensive health checks across all services.
+
+```bash Run Health Checks
+npm run cli -- doctor
+```
+
+**Checks performed**:
+- API Gateway connectivity and latency
+- Wallet Engine health
+- Policy Engine health
+- Agent Runtime health
+- Protocol Adapters health
+- Transaction Engine health
+- Audit/Observability health
+- MCP Server health
+
+**Output includes**:
+- Service name
+- Status (ok/error/unreachable)
+- HTTP response code
+- Latency in milliseconds
+- Error messages (if any)
+
+## Intent Types
+
+Supported transaction intent types for CLI commands:
+
+<Accordion title="View All Intent Types">
+- `transfer_sol` - Transfer SOL between accounts
+- `transfer_spl` - Transfer SPL tokens
+- `swap` - Token swap via DEX
+- `stake` - Stake SOL to validators
+- `unstake` - Unstake from validators
+- `lend_supply` - Supply liquidity to lending protocol
+- `lend_borrow` - Borrow from lending protocol
+- `create_mint` - Create new SPL token mint
+- `mint_token` - Mint SPL tokens
+- `query_balance` - Query wallet balance (read-only)
+- `query_positions` - Query protocol positions (read-only)
+- `create_escrow` - Create escrow contract
+- `accept_escrow` - Accept escrow terms
+- `release_escrow` - Release escrow funds
+- `refund_escrow` - Refund escrow to creator
+- `dispute_escrow` - Dispute escrow terms
+- `resolve_dispute` - Resolve escrow dispute
+- `create_milestone_escrow` - Create milestone-based escrow
+- `release_milestone` - Release milestone payment
+- `x402_pay` - Execute HTTP 402 payment
+- `flash_loan_bundle` - Flash loan transaction bundle
+- `cpi_call` - Cross-program invocation
+- `custom_instruction_bundle` - Custom instruction bundle
+- `treasury_allocate` - Allocate treasury funds
+- `treasury_rebalance` - Rebalance treasury
+- `paper_trade` - Execute paper trade (no real funds)
+</Accordion>
+
+## Supported Protocols
+
+Protocol adapters available in the platform:
+
+- `system-program` - Solana system program (native SOL transfers)
+- `spl-token` - SPL token program
+- `jupiter` - Jupiter aggregator (swaps)
+- `marinade` - Marinade Finance (liquid staking)
+- `solend` - Solend (lending/borrowing)
+- `metaplex` - Metaplex (NFTs)
+- `orca` - Orca (AMM swaps)
+- `raydium` - Raydium (AMM swaps)
+- `escrow` - Custom Anchor escrow program
+
+## Examples
+
+<Accordion title="Complete Workflow Example">
+```bash Complete Agent Workflow
+# 1. Create a wallet
+npm run cli -- wallet create trader-bot --auto-fund --fund-lamports 5000000
+# Save the walletId from output
+
+# 2. Create a policy
+npm run cli -- policy create \
+  --wallet-id <walletId> \
+  --name "safe-trading" \
+  --rules '[{"type":"spending_limit","maxLamportsPerTx":1000000,"requireApprovalAboveLamports":500000},{"type":"protocol_allowlist","protocols":["system-program","jupiter"]}]' \
+  --active true
+
+# 3. Create an agent
+npm run cli -- agent create arb-bot \
+  --wallet-id <walletId> \
+  --mode supervised \
+  --intents transfer_sol swap query_balance
+# Save the agentId from output
+
+# 4. Execute an intent
+npm run cli -- agent exec <agentId> \
+  --type query_balance \
+  --protocol system-program \
+  --intent '{}'
+
+# 5. Check transaction status
+npm run cli -- tx list --wallet-id <walletId>
+
+# 6. View audit trail
+npm run cli -- audit events --agent-id <agentId>
+```
+</Accordion>
+
+## Troubleshooting
+
+<AccordionGroup>
+  <Accordion title="Services unreachable">
+    Ensure all services are running:
+    ```bash
+    set -a; source .env; set +a
+    npm run dev
+    ```
+    
+    Verify gateway is accessible:
+    ```bash
+    curl http://localhost:3000/health
+    ```
+  </Accordion>
+  
+  <Accordion title="Authentication errors">
+    Check your API key is correct:
+    ```bash
+    npm run cli -- config
+    ```
+    
+    Verify `.env` has correct `API_KEY` or pass via flag:
+    ```bash
+    npm run cli -- --key your-api-key doctor
+    ```
+  </Accordion>
+  
+  <Accordion title="Interactive mode exits immediately">
+    This can happen if stdin is not a TTY. Run from a terminal (not piped).
+  </Accordion>
+</AccordionGroup>
+
+## Next Steps
+
+<CardGroup cols={2}>
+  <Card title="SDK Integration" icon="code" href="/integration/sdk">
+    Integrate using the TypeScript SDK
+  </Card>
+  <Card title="MCP Tools" icon="plug" href="/integration/mcp">
+    Use MCP server for AI agent integration
+  </Card>
+  <Card title="SKILLS Contract" icon="file-contract" href="/integration/skills">
+    Review the agent integration contract
+  </Card>
+  <Card title="API Reference" icon="book" href="/api/overview">
+    Explore the REST API directly
+  </Card>
+</CardGroup>
